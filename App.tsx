@@ -1295,9 +1295,9 @@ const App: React.FC = () => {
             
             // 10. viralIndex (gvir) - 복합 계산
             if (appliedFields.has('viralIndex') && subscriberCount && viewCount && videoCount && videoCount > 0) {
-                const conversionRate = subscriberCount / viewCount;
+                const conversionRatePercent = (subscriberCount / viewCount) * 100; // gsub와 동일
                 const avgViewsPerVideo = viewCount / videoCount;
-                newSnapshot.gvir = Math.round((conversionRate * 100) + (avgViewsPerVideo / 1000000));
+                newSnapshot.gvir = Math.round((conversionRatePercent * 100) + (avgViewsPerVideo / 1000000));
                 console.log(`✅ [10] viralIndex: ${newSnapshot.gvir}`);
             }
             
