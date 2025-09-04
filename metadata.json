@@ -1,0 +1,5 @@
+{
+  "name": "YouTube Channel Data Exporter to Google Drive",
+  "description": "An application to fetch comprehensive data from YouTube channels using the YouTube Data API, structure it for time-series analysis, and automatically save it as JSON files to a selected Google Drive folder.",
+  "requestFramePermissions": []
+}
