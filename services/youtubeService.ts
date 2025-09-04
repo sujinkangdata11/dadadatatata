@@ -48,7 +48,7 @@ export const fetchSelectedChannelData = async (
   });
 
   if (parts.size === 0) {
-    return { staticData: {}, snapshotData: { timestamp: new Date().toISOString() } };
+    return { staticData: {}, snapshotData: { ts: new Date().toISOString() } };
   }
 
   const url = `${API_BASE_URL}/channels?part=${Array.from(parts).join(',')}&id=${channelId}&key=${apiKey}`;
@@ -66,7 +66,7 @@ export const fetchSelectedChannelData = async (
 
   const item = data.items[0];
   const staticData: Partial<ChannelData> = {};
-  const snapshotData: Snapshot = { timestamp: new Date().toISOString() };
+  const snapshotData: Snapshot = { ts: new Date().toISOString() };
 
   // Map snippet data
   if (parts.has('snippet') && item.snippet) {

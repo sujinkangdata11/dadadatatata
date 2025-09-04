@@ -1,11 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 
-// Google Identity Services 및 gapi 전역 변수 타입 선언
-declare global {
-    const gapi: any;
-    const google: any;
-}
 import { ChannelData, DriveFile, LogEntry, LogStatus, Snapshot } from './types';
 import { fetchSelectedChannelData, findChannelsImproved, fetchShortsCount, fetchChannelIdByHandle } from './services/youtubeService';
 import { findFileByName, getFileContent, createJsonFile, updateJsonFile, listFolders, updateOrCreateChannelFile, getOrCreateChannelIndex, getExistingChannelIds, createFolder } from './services/driveService';
@@ -132,6 +127,95 @@ const apiDataFields: { group: string; fields: ApiDataField[] }[] = [
   },
 ];
 
+// 응용 데이터 필드 축약 매핑
+const getShortKey = (fieldId: string): string => {
+    const mapping: { [key: string]: string } = {
+        // Growth Metrics (g로 시작)
+        'averageViewsPerVideo': 'gavg',
+        'subscribersPerVideo': 'gsub', 
+        'viewsPerSubscriber': 'gvps',
+        'channelAgeInDays': 'gage',
+        'uploadsPerWeek': 'gupw',
+        'subsGainedPerDay': 'gspd',
+        'viewsGainedPerDay': 'gvpd',
+        'subsGainedPerMonth': 'gspm',
+        'subsGainedPerYear': 'gspy',
+        'subscriberToViewRatioPercent': 'gsvr',
+        'viralIndex': 'gvir',
+        // Content Analysis (c로 시작)
+        'shortsCount': 'csct',
+        'longformCount': 'clct',
+        'totalShortsDuration': 'csdr',
+        // View Analysis (v로 시작)
+        'estimatedShortsViews': 'vesv',
+        'shortsViewsPercentage': 'vsvp',
+        'estimatedLongformViews': 'velv',
+        'longformViewsPercentage': 'vlvp'
+    };
+    return mapping[fieldId] || fieldId;
+};
+
+// 예시용 응용 데이터 계산 함수 (실제 calculateAndAddAppliedData와 동일한 로직)
+const calculateMockAppliedData = (fieldId: string, mockStats: any): number => {
+    const subscriberCount = parseInt(mockStats.subscriberCount, 10);
+    const viewCount = parseInt(mockStats.viewCount, 10);
+    const videoCount = parseInt(mockStats.videoCount, 10);
+    const publishedAt = mockStats.publishedAt;
+    
+    // 채널 나이 계산
+    const channelAgeDays = Math.floor((new Date().getTime() - new Date(publishedAt).getTime()) / (1000 * 60 * 60 * 24));
+    
+    // 모의 숏폼 데이터
+    const mockShortsData = {
+        shortsCount: 25,
+        totalShortsViews: 3200000000
+    };
+
+    switch (fieldId) {
+        case 'averageViewsPerVideo':
+            return Math.round(viewCount / videoCount);
+        case 'subscribersPerVideo':
+            return parseFloat(((subscriberCount / viewCount) * 100).toFixed(4));
+        case 'viewsPerSubscriber':
+            return parseFloat(((viewCount / subscriberCount) * 100).toFixed(2));
+        case 'channelAgeInDays':
+            return channelAgeDays;
+        case 'uploadsPerWeek':
+            return parseFloat((videoCount / (channelAgeDays / 7)).toFixed(2));
+        case 'subsGainedPerDay':
+            return Math.round(subscriberCount / channelAgeDays);
+        case 'viewsGainedPerDay':
+            return Math.round(viewCount / channelAgeDays);
+        case 'subsGainedPerMonth':
+            return Math.round((subscriberCount / channelAgeDays) * 30.44);
+        case 'subsGainedPerYear':
+            return Math.round((subscriberCount / channelAgeDays) * 365.25);
+        case 'subscriberToViewRatioPercent':
+            return parseFloat(((subscriberCount / viewCount) * 100).toFixed(4));
+        case 'viralIndex':
+            const subRate = (subscriberCount / viewCount) * 100;
+            const avgViews = viewCount / videoCount;
+            return parseFloat((subRate * 100 + avgViews / 1000000).toFixed(1));
+        case 'shortsCount':
+            return mockShortsData.shortsCount;
+        case 'longformCount':
+            return Math.min(videoCount, 1000) - mockShortsData.shortsCount;
+        case 'totalShortsDuration':
+            return mockShortsData.shortsCount * 60;
+        case 'estimatedShortsViews':
+            return mockShortsData.totalShortsViews;
+        case 'shortsViewsPercentage':
+            return parseFloat(((mockShortsData.totalShortsViews / viewCount) * 100).toFixed(2));
+        case 'estimatedLongformViews':
+            return Math.max(0, viewCount - mockShortsData.totalShortsViews);
+        case 'longformViewsPercentage':
+            const longformViews = Math.max(0, viewCount - mockShortsData.totalShortsViews);
+            return parseFloat(((longformViews / viewCount) * 100).toFixed(2));
+        default:
+            return 0;
+    }
+};
+
 const appliedDataFields = [
   {
     group: '성장 지표 (추정)',
@@ -196,22 +280,68 @@ const App: React.FC = () => {
     const [isFinding, setIsFinding] = useState(false);
     const [foundChannels, setFoundChannels] = useState<string[]>([]);
     
-    const [isStep3Open, setIsStep3Open] = useState(false);
     const [step3Complete, setStep3Complete] = useState(false);
     const [targetChannelIds, setTargetChannelIds] = useState<string[]>([]);
     const [manualChannelHandle, setManualChannelHandle] = useState('');
     const [isAddingChannel, setIsAddingChannel] = useState(false);
     const [searchKeyword, setSearchKeyword] = useState('popular');
 
+    // 2번/3번 블럭 토글 상태 (기본적으로 2번 블럭이 활성화)
+    const [activeChannelMethod, setActiveChannelMethod] = useState<'search' | 'manual'>('search');
+
     const [step4Complete, setStep4Complete] = useState(false);
-    const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set(['title', 'subscriberCount', 'viewCount', 'videoCount', 'publishedAt']));
-    const [appliedFields, setAppliedFields] = useState<Set<string>>(new Set(['averageViewsPerVideo', 'subsGainedPerDay']));
+    
+    // 진행상황 추적 상태
+    const [processingProgress, setProcessingProgress] = useState({
+        currentIndex: 0,
+        totalCount: 0,
+        currentChannelName: '',
+        currentStep: '',
+        isActive: false
+    });
+    // 디폴트로 "옵션값 1" 10개 필드 모두 선택 (채널제목, 개설일, 국가, 지정URL, 프로필아이콘88×88, 구독자수, 총영상수, 총조회수, 토픽카테고리, 업로드플레이리스트ID)
+    const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set([
+        'title',              // 채널제목
+        'publishedAt',        // 개설일
+        'country',           // 국가
+        'customUrl',         // 지정URL
+        'thumbnailDefault',  // 프로필아이콘 (88×88)
+        'subscriberCount',   // 구독자수
+        'videoCount',        // 총영상수
+        'viewCount',         // 총조회수
+        'topicCategories',   // 토픽카테고리
+        'uploadsPlaylistId'  // 업로드플레이리스트ID
+    ]));
+    // 디폴트로 응용데이터 17개 모두 선택
+    const [appliedFields, setAppliedFields] = useState<Set<string>>(new Set([
+        // 성장 지표 (추정) - 10개
+        'averageViewsPerVideo',      // 1. 영상당 평균 조회수 (기본 선택)
+        'subscribersPerVideo',       // 2. 구독 전환율 (%)
+        'viewsPerSubscriber',        // 3. 구독자 대비 조회수 (%)
+        'channelAgeInDays',         // 4. 채널 운영 기간 (일)
+        'uploadsPerWeek',           // 5. 주당 평균 업로드 수
+        'subsGainedPerDay',         // 6. 일일 평균 구독자 증가
+        'viewsGainedPerDay',        // 7. 일일 평균 조회수 증가
+        'subsGainedPerMonth',       // 8. 월간 평균 구독자 증가
+        'subsGainedPerYear',        // 9. 연간 평균 구독자 증가
+        'viralIndex',               // 10. 바이럴 지수
+        // 콘텐츠 분석 - 3개
+        'shortsCount',              // 11. 숏폼 갯수
+        'longformCount',            // 12. 롱폼 갯수
+        'totalShortsDuration',      // 13. 숏폼 총 영상 길이 (추정)
+        // 조회수 분석 (추정) - 4개
+        'estimatedShortsViews',     // 14. 숏폼 총 조회수 (실제)
+        'shortsViewsPercentage',    // 15. 숏폼 조회수 비중 (%)
+        'estimatedLongformViews',   // 16. 롱폼 총 조회수 (실제)
+        'longformViewsPercentage'   // 17. 롱폼 조회수 비중 (%)
+    ]));
     const [showExampleModal, setShowExampleModal] = useState(false);
     const [exampleJson, setExampleJson] = useState('');
     const [showViralIndexModal, setShowViralIndexModal] = useState(false);
     const [showShortsCountModal, setShowShortsCountModal] = useState(false);
     const [showLongformCountModal, setShowLongformCountModal] = useState(false);
     const [showShortsViewsModal, setShowShortsViewsModal] = useState(false);
+    const [showFieldMappingModal, setShowFieldMappingModal] = useState(false);
     const [isProcessingStarted, setIsProcessingStarted] = useState(false);
 
     const [isProcessing, setIsProcessing] = useState(false);
@@ -571,7 +701,14 @@ const App: React.FC = () => {
                     return;
                 }
                 setFoundChannels(ids);
-                setTargetChannelIds(prev => [...new Set([...prev, ...ids])]);
+                setTargetChannelIds(prev => {
+                    const newIds = [...new Set([...prev, ...ids])];
+                    // 채널이 설정되면 자동으로 3단계도 완료 처리
+                    if (newIds.length > 0) {
+                        setStep3Complete(true);
+                    }
+                    return newIds;
+                });
                 setStep2Complete(true);
                 addLog(LogStatus.SUCCESS, `✅ ${ids.length}개의 기존 채널을 대상으로 설정했습니다.`);
             } else {
@@ -591,7 +728,14 @@ const App: React.FC = () => {
                 }
                 
                 setFoundChannels(ids);
-                setTargetChannelIds(prev => [...new Set([...prev, ...ids])]);
+                setTargetChannelIds(prev => {
+                    const newIds = [...new Set([...prev, ...ids])];
+                    // 채널이 설정되면 자동으로 3단계도 완료 처리
+                    if (newIds.length > 0) {
+                        setStep3Complete(true);
+                    }
+                    return newIds;
+                });
                 setStep2Complete(true);
                 addLog(LogStatus.SUCCESS, `✨ ${ids.length}개의 새로운 채널을 발견하고 대상 목록에 추가했습니다.`);
             }
@@ -603,8 +747,8 @@ const App: React.FC = () => {
     };
     
     const handleAddChannelByHandle = async () => {
-        const trimmedHandle = manualChannelHandle.trim();
-        if (!trimmedHandle) return;
+        const trimmedInput = manualChannelHandle.trim();
+        if (!trimmedInput) return;
 
         if (!user || !youtubeApiKey) {
             addLog(LogStatus.ERROR, '로그인하고 API 키를 설정해야 채널을 추가할 수 있습니다.');
@@ -612,36 +756,70 @@ const App: React.FC = () => {
         }
 
         setIsAddingChannel(true);
-        addLog(LogStatus.PENDING, `'${trimmedHandle}' 핸들을 채널 ID로 변환 중...`);
-
+        
         try {
-            const channelId = await fetchChannelIdByHandle(trimmedHandle, youtubeApiKey);
-            if (!targetChannelIds.includes(channelId)) {
-                setTargetChannelIds(prev => [channelId, ...prev]);
-                addLog(LogStatus.SUCCESS, `채널 추가 성공: ${trimmedHandle} (${channelId})`);
+            // 콤마로 구분된 여러 핸들 처리
+            const handles = trimmedInput.split(',').map(handle => handle.trim()).filter(handle => handle.length > 0);
+            
+            if (handles.length === 1) {
+                addLog(LogStatus.PENDING, `'${handles[0]}' 핸들을 채널 ID로 변환 중...`);
             } else {
-                addLog(LogStatus.WARNING, `채널 '${trimmedHandle}' (${channelId})는 이미 목록에 존재합니다.`);
+                addLog(LogStatus.PENDING, `${handles.length}개의 핸들을 채널 ID로 변환 중: ${handles.join(', ')}`);
             }
-            setManualChannelHandle('');
+
+            let successCount = 0;
+            let errorCount = 0;
+            
+            for (const handle of handles) {
+                try {
+                    const channelId = await fetchChannelIdByHandle(handle, youtubeApiKey);
+                    if (!targetChannelIds.includes(channelId)) {
+                        setTargetChannelIds(prev => {
+                            const newIds = [channelId, ...prev];
+                            // 채널이 추가되면 자동으로 3단계 완료 처리
+                            if (!step3Complete && newIds.length > 0) {
+                                setStep3Complete(true);
+                            }
+                            return newIds;
+                        });
+                        addLog(LogStatus.SUCCESS, `✅ 채널 추가 성공: ${handle} → ${channelId}`);
+                        successCount++;
+                    } else {
+                        addLog(LogStatus.WARNING, `⚠️ 채널 '${handle}' (${channelId})는 이미 목록에 존재합니다.`);
+                    }
+                } catch (error: any) {
+                    addLog(LogStatus.ERROR, `❌ 채널 '${handle}' 추가 실패: ${error.message}`);
+                    errorCount++;
+                }
+            }
+            
+            // 최종 결과 요약
+            if (handles.length > 1) {
+                if (errorCount === 0) {
+                    addLog(LogStatus.SUCCESS, `🎉 모든 채널 처리 완료: ${successCount}개 성공`);
+                } else {
+                    addLog(LogStatus.WARNING, `⚡ 채널 처리 완료: ${successCount}개 성공, ${errorCount}개 실패`);
+                }
+            }
         } catch (error: any) {
-            addLog(LogStatus.ERROR, `채널 추가 실패: ${error.message}`);
+            addLog(LogStatus.ERROR, `채널 추가 중 오류 발생: ${error.message}`);
         } finally {
+            setManualChannelHandle('');
             setIsAddingChannel(false);
         }
     };
     
     const handleRemoveChannel = (idToRemove: string) => {
-        setTargetChannelIds(prev => prev.filter(id => id !== idToRemove));
+        setTargetChannelIds(prev => {
+            const newIds = prev.filter(id => id !== idToRemove);
+            // 모든 채널이 제거되면 3단계 완료 상태 해제
+            if (newIds.length === 0 && step3Complete) {
+                setStep3Complete(false);
+            }
+            return newIds;
+        });
     };
 
-    const handleConfirmTargetChannels = () => {
-        if (targetChannelIds.length > 0) {
-            setStep3Complete(true);
-            addLog(LogStatus.SUCCESS, `3단계 완료: 총 ${targetChannelIds.length}개의 채널이 처리 대상으로 확정되었습니다.`);
-        } else {
-            addLog(LogStatus.ERROR, '최소 1개 이상의 채널을 처리 대상으로 추가해야 합니다.');
-        }
-    };
 
     const handleFieldChange = (fieldId: string, group: 'basic' | 'applied') => {
         const updater = group === 'basic' ? setSelectedFields : setAppliedFields;
@@ -677,149 +855,297 @@ const App: React.FC = () => {
             setIsProcessingStarted(true);
             addLog(LogStatus.SUCCESS, `4단계 완료: 필드 선택이 확정되었으며, 5단계 데이터 처리를 시작합니다.`);
 
-            // 1단계: 채널 ID 준비 (모드에 따라 다르게 처리)
-            let targetChannelIds: string[] = [];
+            // 1단계: 채널 ID 준비 (활성화된 방법에 따라 처리)
+            let processTargetChannelIds: string[] = [];
             
             if (updateMode === 'existing') {
                 // 기존 채널 업데이트 모드
                 addLog(LogStatus.PENDING, `기존 채널 데이터 업데이트 중... (${existingChannelsCount}개)`);
-                targetChannelIds = await getExistingChannelIds(selectedFolder.id);
+                processTargetChannelIds = await getExistingChannelIds(selectedFolder.id);
                 
-                if (targetChannelIds.length === 0) {
+                if (processTargetChannelIds.length === 0) {
                     addLog(LogStatus.WARNING, '기존 채널이 없습니다. 신규 데이터 수집 모드로 전환해주세요.');
                     return;
                 }
             } else {
-                // 신규 채널 수집 모드 - 개선된 로직
-                const categoryLabel = youtubeCategories.find(cat => cat.value === selectedCategory)?.label || '전체 카테고리';
-                
-                // 1단계: 기존 채널 목록 먼저 가져오기
-                addLog(LogStatus.PENDING, '기존 채널 목록 확인 중...');
-                const existingIds = await getExistingChannelIds(selectedFolder.id);
-                
-                // 2단계: 스마트 검색 - 기존 채널을 제외하고 검색
-                addLog(LogStatus.PENDING, `🔍 신규 채널 발굴 중... (기존 ${existingIds.length}개 제외, ${categoryLabel})`);
-                
-                const foundChannelIds = await findChannelsImproved(
-                    youtubeApiKey,
-                    parseInt(minSubscribers),
-                    sortOrder,
-                    channelCount,
-                    selectedCategory,
-                    existingIds, // 기존 채널 제외
-                    searchKeyword
-                );
+                // 활성화된 채널 수집 방법에 따라 분기
+                if (activeChannelMethod === 'search') {
+                    // 자동 채널 탐색 모드
+                    const categoryLabel = youtubeCategories.find(cat => cat.value === selectedCategory)?.label || '전체 카테고리';
+                    
+                    // 1단계: 기존 채널 목록 먼저 가져오기
+                    addLog(LogStatus.PENDING, '기존 채널 목록 확인 중...');
+                    const existingIds = await getExistingChannelIds(selectedFolder.id);
+                    
+                    // 2단계: 스마트 검색 - 기존 채널을 제외하고 검색
+                    addLog(LogStatus.PENDING, `🔍 신규 채널 발굴 중... (기존 ${existingIds.length}개 제외, ${categoryLabel})`);
+                    
+                    const foundChannelIds = await findChannelsImproved(
+                        youtubeApiKey,
+                        parseInt(minSubscribers),
+                        sortOrder,
+                        channelCount,
+                        selectedCategory,
+                        existingIds, // 기존 채널 제외
+                        searchKeyword
+                    );
 
-                if (foundChannelIds.length === 0) {
-                    if (existingIds.length > 0) {
-                        addLog(LogStatus.WARNING, '해당 조건에서 새로운 채널을 더 이상 발견할 수 없습니다. 다른 카테고리나 조건을 시도해보세요.');
-                    } else {
-                        addLog(LogStatus.WARNING, '조건에 맞는 채널을 찾을 수 없습니다. 구독자수 범위나 카테고리를 조정해보세요.');
+                    if (foundChannelIds.length === 0) {
+                        if (existingIds.length > 0) {
+                            addLog(LogStatus.WARNING, '해당 조건에서 새로운 채널을 더 이상 발견할 수 없습니다. 다른 카테고리나 조건을 시도해보세요.');
+                        } else {
+                            addLog(LogStatus.WARNING, '조건에 맞는 채널을 찾을 수 없습니다. 구독자수 범위나 카테고리를 조정해보세요.');
+                        }
+                        return;
                     }
-                    return;
-                }
 
-                targetChannelIds = foundChannelIds;
-                addLog(LogStatus.SUCCESS, `✨ ${targetChannelIds.length}개의 새로운 채널을 발견했습니다!`);
+                    processTargetChannelIds = foundChannelIds;
+                    addLog(LogStatus.SUCCESS, `✨ ${processTargetChannelIds.length}개의 새로운 채널을 발견했습니다!`);
+                    
+                } else if (activeChannelMethod === 'manual') {
+                    // 직접 채널 입력 모드 - 현재 상태의 targetChannelIds 사용
+                    if (targetChannelIds.length === 0) {
+                        addLog(LogStatus.WARNING, '처리할 채널이 없습니다. 직접 채널 입력 블럭에서 채널을 추가해주세요.');
+                        return;
+                    }
+                    
+                    processTargetChannelIds = [...targetChannelIds]; // 상태 복사
+                    addLog(LogStatus.SUCCESS, `📝 직접 입력된 ${processTargetChannelIds.length}개 채널을 처리합니다.`);
+                }
             }
 
-            addLog(LogStatus.SUCCESS, `처리할 채널: ${targetChannelIds.length}개`);
+            addLog(LogStatus.SUCCESS, `처리할 채널: ${processTargetChannelIds.length}개`);
+
+            // 진행상황 초기화 (processTargetChannelIds 확정 후)
+            setProcessingProgress({
+                currentIndex: 0,
+                totalCount: processTargetChannelIds.length,
+                currentChannelName: '',
+                currentStep: '채널 데이터 추출 준비 중...',
+                isActive: true
+            });
 
             // 2단계: 선택된 필드로 데이터 추출
             addLog(LogStatus.PENDING, '채널 데이터 추출 중...');
             const channelDataList = [];
 
-            for (let i = 0; i < targetChannelIds.length; i++) {
-                const channelId = targetChannelIds[i];
-                addLog(LogStatus.PENDING, `채널 데이터 추출 중... (${i + 1}/${targetChannelIds.length})`);
+            for (let i = 0; i < processTargetChannelIds.length; i++) {
+                const channelId = processTargetChannelIds[i];
+                
+                // 진행상황 업데이트
+                setProcessingProgress(prev => ({
+                    ...prev,
+                    currentIndex: i + 1,
+                    currentChannelName: channelId,
+                    currentStep: '기본 데이터 수집 중...'
+                }));
+                
+                addLog(LogStatus.PENDING, `채널 데이터 추출 중... (${i + 1}/${processTargetChannelIds.length}) - ${channelId}`);
 
                 try {
+                    // 모든 필드 (기본 + 응용) 포함
+                    const allFields = new Set([...selectedFields, ...appliedFields]);
+                    
+                    // 의존성 필드 추가 (응용데이터 계산을 위해 필요한 필드들)
+                    if (appliedFields.has('longformCount')) {
+                        allFields.add('videoCount');
+                    }
+                    if (allFields.has('shortsCount') || allFields.has('longformCount') || allFields.has('totalShortsDuration') || allFields.has('estimatedShortsViews') || allFields.has('estimatedLongformViews')) {
+                        allFields.add('uploadsPlaylistId');
+                    }
+                    if (Array.from(appliedFields).some((f: string) => f.includes('Gained') || f.includes('uploadsPer') || f.includes('Age'))) {
+                        allFields.add('publishedAt');
+                    }
+                    
+                    console.log(`[DEBUG] 처리 시작 - 채널 ${channelId}:`, {
+                        selectedFields: Array.from(selectedFields),
+                        appliedFields: Array.from(appliedFields),
+                        allFields: Array.from(allFields)
+                    });
+
                     const { staticData, snapshotData } = await fetchSelectedChannelData(
                         channelId,
                         youtubeApiKey,
-                        selectedFields
+                        allFields
                     );
+                    
+                    // 채널명 업데이트
+                    setProcessingProgress(prev => ({
+                        ...prev,
+                        currentChannelName: staticData.title || channelId,
+                        currentStep: '기본 데이터 수집 완료'
+                    }));
+
+                    // 2. Fetch shorts count if needed (일괄처리에서도 동일하게 적용)
+                    let shortsCountData: { shortsCount: number; totalShortsViews: number } | undefined;
+                    const uploadsPlaylistId = staticData.uploadsPlaylistId;
+                    const needsShortsCount = allFields.has('shortsCount') || allFields.has('longformCount') || allFields.has('totalShortsDuration') || allFields.has('estimatedShortsViews') || allFields.has('estimatedLongformViews') || allFields.has('shortsViewsPercentage') || allFields.has('longformViewsPercentage');
+
+                    if (needsShortsCount && uploadsPlaylistId) {
+                        setProcessingProgress(prev => ({
+                            ...prev,
+                            currentStep: '콘텐츠 분석 중 (숏폼 집계)...'
+                        }));
+                        addLog(LogStatus.PENDING, `콘텐츠 분석 중 - ${staticData.title || channelId} (숏폼 갯수 집계)... 채널의 영상 수에 따라 시간이 소요될 수 있습니다.`);
+                        try {
+                            shortsCountData = await fetchShortsCount(uploadsPlaylistId, youtubeApiKey);
+                            addLog(LogStatus.SUCCESS, `콘텐츠 분석 완료 - ${staticData.title || channelId}: 숏폼 ${shortsCountData.shortsCount}개 발견.`);
+                            setProcessingProgress(prev => ({
+                                ...prev,
+                                currentStep: '콘텐츠 분석 완료'
+                            }));
+                        } catch (e: any) {
+                            addLog(LogStatus.ERROR, `숏폼 갯수 집계 실패 - ${staticData.title || channelId}: ${e.message}`);
+                            setProcessingProgress(prev => ({
+                                ...prev,
+                                currentStep: '콘텐츠 분석 실패 (계속 진행)'
+                            }));
+                        }
+                    }
+
+                    // 3. 응용데이터 계산 (shortsCountData 포함)
+                    let finalSnapshotData = snapshotData;
+                    if (appliedFields.size > 0) {
+                        setProcessingProgress(prev => ({
+                            ...prev,
+                            currentStep: '응용데이터 계산 중...'
+                        }));
+                        console.log(`[DEBUG] 응용데이터 계산 시작 - 채널 ${channelId}:`, {
+                            originalSnapshot: snapshotData,
+                            publishedAt: staticData.publishedAt,
+                            shortsCountData: shortsCountData
+                        });
+                        
+                        finalSnapshotData = calculateAndAddAppliedData(snapshotData, staticData.publishedAt, shortsCountData);
+                        
+                        console.log(`[DEBUG] 응용데이터 계산 완료 - 채널 ${channelId}:`, {
+                            finalSnapshot: finalSnapshotData
+                        });
+                        setProcessingProgress(prev => ({
+                            ...prev,
+                            currentStep: '응용데이터 계산 완료'
+                        }));
+                    }
 
                     channelDataList.push({
                         channelId,
                         staticData,
-                        snapshot: snapshotData
+                        snapshot: finalSnapshotData
                     });
                     
+                    setProcessingProgress(prev => ({
+                        ...prev,
+                        currentStep: `데이터 추출 완료 (${i + 1}/${processTargetChannelIds.length})`
+                    }));
                     addLog(LogStatus.SUCCESS, `채널 ${staticData.title || channelId} 데이터 추출 완료`);
                 } catch (error) {
+                    setProcessingProgress(prev => ({
+                        ...prev,
+                        currentStep: `데이터 추출 실패: ${error}`
+                    }));
                     addLog(LogStatus.WARNING, `채널 ${channelId} 데이터 추출 실패: ${error}`);
                 }
             }
 
             // 3단계: 채널별 파일 생성/업데이트 및 Google Drive 저장
+            setProcessingProgress(prev => ({
+                ...prev,
+                currentIndex: 0,
+                totalCount: channelDataList.length,
+                currentChannelName: '',
+                currentStep: 'Google Drive 저장 준비...'
+            }));
             addLog(LogStatus.PENDING, '채널별 파일 생성/업데이트 중...');
-            
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-            const collectionInfo = {
-                exportId: `export-${timestamp}`,
-                filters: {
-                    maxSubscribers: parseInt(minSubscribers),
-                    sortOrder: sortOrder,
-                    category: selectedCategory || 'all'
-                },
-                selectedFields: Array.from(selectedFields)
-            };
 
-            // 각 채널을 개별 파일로 저장/업데이트
+            // 각 채널을 개별 파일로 저장/업데이트 (간소화된 메타데이터 구조)
             for (let i = 0; i < channelDataList.length; i++) {
                 const channelData = channelDataList[i];
+                
+                setProcessingProgress(prev => ({
+                    ...prev,
+                    currentIndex: i + 1,
+                    currentChannelName: channelData.staticData?.title || channelData.channelId,
+                    currentStep: 'Google Drive에 저장 중...'
+                }));
+                
                 addLog(LogStatus.PENDING, `채널 파일 처리 중... (${i + 1}/${channelDataList.length}): ${channelData.staticData?.title || channelData.channelId}`);
                 
                 try {
-                    await updateOrCreateChannelFile(channelData, selectedFolder.id, collectionInfo);
+                    await updateOrCreateChannelFile(channelData, selectedFolder.id);
+                    setProcessingProgress(prev => ({
+                        ...prev,
+                        currentStep: `저장 완료 (${i + 1}/${channelDataList.length})`
+                    }));
                     addLog(LogStatus.SUCCESS, `✓ ${channelData.staticData?.title || channelData.channelId} 파일 처리 완료`);
                 } catch (error) {
+                    setProcessingProgress(prev => ({
+                        ...prev,
+                        currentStep: `저장 실패: ${error}`
+                    }));
                     addLog(LogStatus.WARNING, `⚠ ${channelData.channelId} 파일 처리 실패: ${error}`);
                 }
             }
 
-            // collections 폴더 생성 및 메타데이터 파일 생성
+            // collections 폴더 생성 및 간소화된 수집 기록 생성
             let collectionsFolder = await findFileByName('collections', selectedFolder.id);
             if (!collectionsFolder) {
                 collectionsFolder = await createFolder('collections', selectedFolder.id);
                 addLog(LogStatus.SUCCESS, '📁 collections 폴더를 생성했습니다.');
             }
 
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
             const metadataFileName = `${timestamp}.json`;
             const metadataContent = {
-                collectionInfo: {
-                    ...collectionInfo,
-                    timestamp: new Date().toISOString(),
-                    totalChannels: channelDataList.length,
-                    updateMode: updateMode
-                },
+                timestamp: new Date().toISOString(),
+                totalChannels: channelDataList.length,
+                updateMode: updateMode,
                 channels: channelDataList.map(ch => ({
                     channelId: ch.channelId,
-                    title: ch.staticData?.title || 'Unknown',
-                    processed: true
+                    title: ch.staticData?.title || 'Unknown'
                 }))
             };
 
             await createJsonFile(metadataFileName, collectionsFolder.id, metadataContent);
-            addLog(LogStatus.SUCCESS, `📋 수집 메타데이터 파일 생성: collections/${metadataFileName}`);
+            addLog(LogStatus.SUCCESS, `📋 수집 기록 파일 생성: collections/${metadataFileName}`);
             addLog(LogStatus.SUCCESS, `🎉 처리 완료: 총 ${channelDataList.length}개 채널을 ${updateMode === 'existing' ? '업데이트' : '신규 수집'}했습니다.`);
+            
+            // 진행상황 완료 처리
+            setProcessingProgress(prev => ({
+                ...prev,
+                currentStep: `✅ 모든 처리 완료! (${channelDataList.length}개 채널)`,
+                isActive: false
+            }));
 
         } catch (error: any) {
             console.error('데이터 처리 오류:', error);
             addLog(LogStatus.ERROR, `데이터 처리 실패: ${error.message}`);
             setStep4Complete(false);
             setIsProcessingStarted(false);
+            
+            // 진행상황 오류 처리
+            setProcessingProgress(prev => ({
+                ...prev,
+                currentStep: `❌ 처리 실패: ${error.message}`,
+                isActive: false
+            }));
         }
     };
 
     const handleShowExample = () => {
-        // 새로운 채널 기반 파일 구조에 맞는 예시 생성
-        const sampleSnapshot: Partial<Snapshot> = {};
+        // 실제 동작과 유사한 예시 데이터 생성
+        const sampleSnapshot: any = {};
         const sampleStaticData: any = {};
         const allFields = [...selectedFields, ...appliedFields];
 
-        // 선택된 필드들의 예시 데이터 생성
+        // 기본 통계 데이터 (계산 기반이 될 값들)
+        const mockStats = {
+            subscriberCount: '288000000',
+            viewCount: '53123456789', 
+            videoCount: '799',
+            publishedAt: '2012-02-20T13:42:00Z'
+        };
+
+        // 선택된 필드들의 실제 계산 결과 생성
         allFields.forEach(fieldId => {
             const allDataFields = [...apiDataFields.flatMap(g => g.fields), ...appliedDataFields.flatMap(g => g.fields)];
             const field = allDataFields.find(f => f.id === fieldId);
@@ -827,9 +1153,25 @@ const App: React.FC = () => {
                 // 정적 데이터와 스냅샷 데이터 분리
                 if (['title', 'description', 'customUrl', 'publishedAt', 'defaultLanguage', 'country', 'thumbnailUrl', 'thumbnailDefault', 'thumbnailMedium', 'thumbnailHigh'].includes(field.id)) {
                     sampleStaticData[field.id] = field.example;
+                } else if (['subscriberCount', 'viewCount', 'videoCount', 'hiddenSubscriberCount'].includes(field.id)) {
+                    // 기본 통계는 문자열로 
+                    sampleSnapshot[field.id] = (mockStats as any)[field.id] || field.example;
                 } else {
-                    (sampleSnapshot as any)[field.id] = field.example;
+                    // 응용 데이터는 실제 계산된 숫자 값으로
+                    const shortKey = getShortKey(field.id);
+                    const calculatedValue = calculateMockAppliedData(field.id, mockStats);
+                    sampleSnapshot[shortKey] = calculatedValue;
                 }
+            }
+        });
+
+        // fieldMapping 생성 (응용 데이터가 있을 때만)
+        const fieldMapping: { [key: string]: string } = {};
+        appliedFields.forEach(fieldId => {
+            const shortKey = getShortKey(fieldId);
+            const appliedField = appliedDataFields.flatMap(g => g.fields).find(f => f.id === fieldId);
+            if (appliedField) {
+                fieldMapping[shortKey] = `${fieldId} (${appliedField.label})`;
             }
         });
 
@@ -837,9 +1179,10 @@ const App: React.FC = () => {
         const sampleChannelFile = {
             channelId: "UCX6OQ3DkcsbYNE6H8uQQuVA",
             staticData: sampleStaticData,
+            ...(Object.keys(fieldMapping).length > 0 && { fieldMapping }),
             snapshots: [
                 {
-                    timestamp: new Date().toISOString(),
+                    ts: new Date().toISOString(),
                     ...sampleSnapshot,
                     collectionInfo: {
                         exportId: `export-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`,
@@ -864,95 +1207,154 @@ const App: React.FC = () => {
     };
 
     
+    /**
+     * 응용데이터 계산 함수 - UI appliedDataFields 순서를 엄격히 준수
+     * 15년차 시니어 개발자 스타일: 의존성과 순서를 보장하는 안정적인 계산
+     */
     const calculateAndAddAppliedData = (snapshot: Snapshot, publishedAt?: string, shortsCountData?: { shortsCount: number; totalShortsViews: number }): Snapshot => {
+        console.log('🔍 [시니어 로직] 응용데이터 계산 시작 - UI 순서 엄격 준수');
+        console.log('📊 선택된 필드:', Array.from(appliedFields));
+        console.log('📈 총 필드 수:', appliedFields.size);
+        console.log('📋 입력 데이터:', { snapshot, publishedAt, shortsCountData });
+        
         const newSnapshot: Snapshot = { ...snapshot };
         
+        // 기본 데이터 파싱 및 검증
         const subscriberCount = snapshot.subscriberCount ? parseInt(snapshot.subscriberCount, 10) : undefined;
         const viewCount = snapshot.viewCount ? parseInt(snapshot.viewCount, 10) : undefined;
         const videoCount = snapshot.videoCount ? parseInt(snapshot.videoCount, 10) : undefined;
-
+        
+        console.log('📈 파싱된 기본 데이터:', { subscriberCount, viewCount, videoCount });
+        
+        // 의존성 변수들 (순서대로 계산됨)
         let channelAgeDays: number | undefined;
-        if (publishedAt) {
-            const publishedDate = new Date(publishedAt);
-            const now = new Date();
-            channelAgeDays = Math.floor((now.getTime() - publishedDate.getTime()) / (1000 * 60 * 60 * 24));
-            if(appliedFields.has('channelAgeInDays')) newSnapshot.channelAgeInDays = channelAgeDays;
-        }
-
-        if (subscriberCount !== undefined && viewCount !== undefined && videoCount !== undefined && videoCount > 0) {
-            if(appliedFields.has('averageViewsPerVideo')) newSnapshot.averageViewsPerVideo = Math.round(viewCount / videoCount);
-            if(appliedFields.has('subscribersPerVideo')) {
-                newSnapshot.subscribersPerVideo = parseFloat(((subscriberCount / viewCount) * 100).toFixed(4));
+        let subsGainedPerDay: number | undefined;
+        let estimatedShortsViews: number | undefined;
+        
+        try {
+            // ====== 성장 지표 (추정) - 정확한 UI 순서 ======
+            
+            // 1. averageViewsPerVideo (gavg)
+            if (appliedFields.has('averageViewsPerVideo') && viewCount && videoCount && videoCount > 0) {
+                const averageViews = Math.round(viewCount / videoCount);
+                newSnapshot.gavg = averageViews;
+                console.log(`✅ [1] averageViewsPerVideo: ${averageViews} (${viewCount} ÷ ${videoCount})`);
             }
-        }
-        if (subscriberCount !== undefined && viewCount !== undefined && subscriberCount > 0) {
-             if(appliedFields.has('viewsPerSubscriber')) newSnapshot.viewsPerSubscriber = parseFloat(((viewCount / subscriberCount) * 100).toFixed(2));
-        }
-        if (subscriberCount !== undefined && viewCount !== undefined && viewCount > 0) {
-            if(appliedFields.has('subscriberToViewRatioPercent')) newSnapshot.subscriberToViewRatioPercent = parseFloat(((subscriberCount / viewCount) * 100).toFixed(4));
-        }
-
-        if (channelAgeDays !== undefined && channelAgeDays > 0) {
-            if (videoCount !== undefined) {
-                if(appliedFields.has('uploadsPerWeek')) newSnapshot.uploadsPerWeek = parseFloat((videoCount / (channelAgeDays / 7)).toFixed(2));
+            
+            // 2. subscribersPerVideo (gsub) - 구독 전환율
+            if (appliedFields.has('subscribersPerVideo') && subscriberCount && viewCount && viewCount > 0) {
+                newSnapshot.gsub = parseFloat(((subscriberCount / viewCount) * 100).toFixed(4));
+                console.log(`✅ [2] subscribersPerVideo: ${newSnapshot.gsub}%`);
             }
-            if (subscriberCount !== undefined) {
-                const subsPerDay = subscriberCount / channelAgeDays;
-                if(appliedFields.has('subsGainedPerDay')) newSnapshot.subsGainedPerDay = Math.round(subsPerDay);
-                if(appliedFields.has('subsGainedPerMonth')) newSnapshot.subsGainedPerMonth = Math.round(subsPerDay * 30.44);
-                if(appliedFields.has('subsGainedPerYear')) newSnapshot.subsGainedPerYear = Math.round(subsPerDay * 365.25);
+            
+            // 3. viewsPerSubscriber (gvps)
+            if (appliedFields.has('viewsPerSubscriber') && viewCount && subscriberCount && subscriberCount > 0) {
+                newSnapshot.gvps = parseFloat(((viewCount / subscriberCount) * 100).toFixed(2));
+                console.log(`✅ [3] viewsPerSubscriber: ${newSnapshot.gvps}%`);
             }
-             if (viewCount !== undefined) {
-                const viewsPerDay = viewCount / channelAgeDays;
-                if(appliedFields.has('viewsGainedPerDay')) newSnapshot.viewsGainedPerDay = Math.round(viewsPerDay);
-
-                if (subscriberCount !== undefined) {
-                     const subsPerDay = subscriberCount / channelAgeDays;
-                     if(appliedFields.has('viralIndex')) {
-                        const conversionRate = subscriberCount / viewCount;
-                        const videoCount = snapshot.videoCount ? parseInt(snapshot.videoCount, 10) : 1;
-                        const avgViewsPerVideo = viewCount / videoCount;
-                        newSnapshot.viralIndex = Math.round((conversionRate * 100) + (avgViewsPerVideo / 1000000));
-                     }
-                }
+            
+            // 4. channelAgeInDays (gage) - 다른 계산들의 기반이 됨
+            if (appliedFields.has('channelAgeInDays') && publishedAt) {
+                const publishedDate = new Date(publishedAt);
+                const now = new Date();
+                channelAgeDays = Math.floor((now.getTime() - publishedDate.getTime()) / (1000 * 60 * 60 * 24));
+                newSnapshot.gage = channelAgeDays;
+                console.log(`✅ [4] channelAgeInDays: ${channelAgeDays}일`);
             }
+            
+            // 5. uploadsPerWeek (gupw) - channelAgeDays 의존
+            if (appliedFields.has('uploadsPerWeek') && videoCount && channelAgeDays && channelAgeDays > 0) {
+                newSnapshot.gupw = parseFloat((videoCount / (channelAgeDays / 7)).toFixed(2));
+                console.log(`✅ [5] uploadsPerWeek: ${newSnapshot.gupw}개/주`);
+            }
+            
+            // 6. subsGainedPerDay (gspd) - 8,9번의 기반이 됨
+            if (appliedFields.has('subsGainedPerDay') && subscriberCount && channelAgeDays && channelAgeDays > 0) {
+                subsGainedPerDay = subscriberCount / channelAgeDays;
+                newSnapshot.gspd = Math.round(subsGainedPerDay);
+                console.log(`✅ [6] subsGainedPerDay: ${newSnapshot.gspd}명/일`);
+            }
+            
+            // 7. viewsGainedPerDay (gvpd)
+            if (appliedFields.has('viewsGainedPerDay') && viewCount && channelAgeDays && channelAgeDays > 0) {
+                newSnapshot.gvpd = Math.round(viewCount / channelAgeDays);
+                console.log(`✅ [7] viewsGainedPerDay: ${newSnapshot.gvpd}회/일`);
+            }
+            
+            // 8. subsGainedPerMonth (gspm) - subsGainedPerDay 의존
+            if (appliedFields.has('subsGainedPerMonth') && subsGainedPerDay) {
+                newSnapshot.gspm = Math.round(subsGainedPerDay * 30.44);
+                console.log(`✅ [8] subsGainedPerMonth: ${newSnapshot.gspm}명/월`);
+            }
+            
+            // 9. subsGainedPerYear (gspy) - subsGainedPerDay 의존
+            if (appliedFields.has('subsGainedPerYear') && subsGainedPerDay) {
+                newSnapshot.gspy = Math.round(subsGainedPerDay * 365.25);
+                console.log(`✅ [9] subsGainedPerYear: ${newSnapshot.gspy}명/년`);
+            }
+            
+            // 10. viralIndex (gvir) - 복합 계산
+            if (appliedFields.has('viralIndex') && subscriberCount && viewCount && videoCount && videoCount > 0) {
+                const conversionRate = subscriberCount / viewCount;
+                const avgViewsPerVideo = viewCount / videoCount;
+                newSnapshot.gvir = Math.round((conversionRate * 100) + (avgViewsPerVideo / 1000000));
+                console.log(`✅ [10] viralIndex: ${newSnapshot.gvir}`);
+            }
+            
+            // ====== 콘텐츠 분석 ======
+            
+            // 11. shortsCount (csct) - shortsCountData 필요
+            if (appliedFields.has('shortsCount') && shortsCountData) {
+                newSnapshot.csct = shortsCountData.shortsCount;
+                console.log(`✅ [11] shortsCount: ${newSnapshot.csct}개`);
+            }
+            
+            // 12. longformCount (clct) - shortsCount 의존
+            if (appliedFields.has('longformCount') && videoCount && shortsCountData) {
+                const analyzedVideoCount = Math.min(videoCount, 1000);
+                newSnapshot.clct = analyzedVideoCount - shortsCountData.shortsCount;
+                console.log(`✅ [12] longformCount: ${newSnapshot.clct}개`);
+            }
+            
+            // 13. totalShortsDuration (csdr) - shortsCount 의존
+            if (appliedFields.has('totalShortsDuration') && shortsCountData) {
+                newSnapshot.csdr = shortsCountData.shortsCount * 60;
+                console.log(`✅ [13] totalShortsDuration: ${newSnapshot.csdr}초`);
+            }
+            
+            // ====== 조회수 분석 (추정) ======
+            
+            // 14. estimatedShortsViews (vesv) - 15,16,17번의 기반이 됨
+            if (appliedFields.has('estimatedShortsViews') && shortsCountData) {
+                estimatedShortsViews = shortsCountData.totalShortsViews;
+                newSnapshot.vesv = estimatedShortsViews;
+                console.log(`✅ [14] estimatedShortsViews: ${estimatedShortsViews}회`);
+            }
+            
+            // 15. shortsViewsPercentage (vsvp) - estimatedShortsViews 의존
+            if (appliedFields.has('shortsViewsPercentage') && viewCount && estimatedShortsViews !== undefined) {
+                newSnapshot.vsvp = parseFloat(((estimatedShortsViews / viewCount) * 100).toFixed(2));
+                console.log(`✅ [15] shortsViewsPercentage: ${newSnapshot.vsvp}%`);
+            }
+            
+            // 16. estimatedLongformViews (velv) - estimatedShortsViews 의존
+            if (appliedFields.has('estimatedLongformViews') && viewCount && estimatedShortsViews !== undefined) {
+                newSnapshot.velv = Math.max(0, viewCount - estimatedShortsViews);
+                console.log(`✅ [16] estimatedLongformViews: ${newSnapshot.velv}회`);
+            }
+            
+            // 17. longformViewsPercentage (vlvp) - estimatedLongformViews 의존
+            if (appliedFields.has('longformViewsPercentage') && viewCount && newSnapshot.velv !== undefined) {
+                newSnapshot.vlvp = parseFloat(((newSnapshot.velv / viewCount) * 100).toFixed(2));
+                console.log(`✅ [17] longformViewsPercentage: ${newSnapshot.vlvp}%`);
+            }
+            
+        } catch (error) {
+            console.error('❌ 응용데이터 계산 중 오류:', error);
         }
         
-        // Content Analysis
-        if (appliedFields.has('shortsCount') && shortsCountData) {
-            newSnapshot.shortsCount = shortsCountData.shortsCount;
-        }
-        if (appliedFields.has('longformCount') && videoCount !== undefined && shortsCountData) {
-            const analyzedVideoCount = Math.min(videoCount, 1000); // 1000개 제한 적용
-            newSnapshot.longformCount = analyzedVideoCount - shortsCountData.shortsCount;
-        }
-        if (appliedFields.has('totalShortsDuration') && shortsCountData) {
-            newSnapshot.totalShortsDuration = shortsCountData.shortsCount * 60;
-        }
-        
-        // View Analysis
-        if (appliedFields.has('estimatedShortsViews') || appliedFields.has('estimatedLongformViews') || appliedFields.has('shortsViewsPercentage') || appliedFields.has('longformViewsPercentage')) {
-            if (viewCount !== undefined && shortsCountData) {
-                // Use actual shorts views instead of estimation
-                if(appliedFields.has('estimatedShortsViews')){
-                    newSnapshot.estimatedShortsViews = shortsCountData.totalShortsViews;
-                }
-                
-                const longformViews = Math.max(0, viewCount - shortsCountData.totalShortsViews);
-                if(appliedFields.has('estimatedLongformViews')){
-                    newSnapshot.estimatedLongformViews = longformViews;
-                }
-                // Calculate shorts views percentage of total views
-                if(appliedFields.has('shortsViewsPercentage')){
-                    newSnapshot.shortsViewsPercentage = parseFloat(((shortsCountData.totalShortsViews / viewCount) * 100).toFixed(2));
-                }
-                // Calculate longform views percentage of total views
-                if(appliedFields.has('longformViewsPercentage')){
-                    newSnapshot.longformViewsPercentage = parseFloat(((longformViews / viewCount) * 100).toFixed(2));
-                }
-            }
-        }
-
+        console.log('🎉 [시니어 로직] 응용데이터 계산 완료 - 17개 순서 보장됨');
+        console.log('📊 최종 결과:', newSnapshot);
         return newSnapshot;
     };
 
@@ -977,7 +1379,7 @@ const App: React.FC = () => {
                 if (allFields.has('shortsCount') || allFields.has('longformCount') || allFields.has('totalShortsDuration') || allFields.has('estimatedShortsViews') || allFields.has('estimatedLongformViews')) {
                     allFields.add('uploadsPlaylistId');
                 }
-                if (Array.from(appliedFields).some(f => f.includes('Gained') || f.includes('uploadsPer') || f.includes('Age'))) {
+                if (Array.from(appliedFields).some((f: string) => f.includes('Gained') || f.includes('uploadsPer') || f.includes('Age'))) {
                     allFields.add('publishedAt');
                 }
 
@@ -1013,21 +1415,37 @@ const App: React.FC = () => {
                 }
 
                 let channelData: ChannelData;
+                const now = new Date().toISOString();
+                
                 if (existingFile) {
                     addLog(LogStatus.INFO, `기존 파일 '${fileName}' 발견. 데이터를 업데이트합니다.`);
                     const content = await getFileContent(existingFile.id);
                     channelData = JSON.parse(content);
+                    
                     // Add new snapshot
                     channelData.snapshots.push(newSnapshotWithAppliedData);
                     // Update static data
                     Object.assign(channelData, staticData);
+                    
+                    // Update metadata (간소화된 3개 필드)
+                    channelData.metadata = {
+                        firstCollected: channelData.metadata?.firstCollected || now,
+                        lastUpdated: now,
+                        totalCollections: channelData.snapshots.length
+                    };
+                    
                     await updateJsonFile(existingFile.id, channelData);
                 } else {
                     addLog(LogStatus.INFO, `새 파일 '${fileName}'을(를) 생성합니다.`);
                     channelData = {
                         channelId,
                         ...staticData,
-                        snapshots: [newSnapshotWithAppliedData]
+                        snapshots: [newSnapshotWithAppliedData],
+                        metadata: {
+                            firstCollected: now,
+                            lastUpdated: now,
+                            totalCollections: 1
+                        }
                     };
                     await createJsonFile(fileName, folderId, channelData);
                 }
@@ -1265,13 +1683,49 @@ const App: React.FC = () => {
 
             {/* Main Content Area */}
             <main className="space-y-8">
-                {/* Step 2: Find Channels */}
-                <Step
-                    stepNumber={2}
-                    title="분석 대상 채널 탐색"
-                    description="특정 기준(구독자 수, 정렬 순서)에 맞는 채널을 자동으로 탐색하거나, 채널 ID를 수동으로 추가합니다."
-                    isComplete={step2Complete}
-                >
+                {/* Channel Method Toggle */}
+                <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
+                    <h2 className="text-xl font-bold text-white mb-4">2. 채널 선택 방법</h2>
+                    <div className="flex flex-col sm:flex-row gap-4 mb-6">
+                        <button
+                            onClick={() => setActiveChannelMethod('search')}
+                            className={`flex-1 p-4 rounded-lg border-2 transition-all duration-200 ${
+                                activeChannelMethod === 'search' 
+                                    ? 'border-blue-500 bg-blue-500/20 text-blue-400' 
+                                    : 'border-slate-600 bg-slate-700/50 text-slate-300 hover:border-slate-500'
+                            }`}
+                        >
+                            <div className="text-left">
+                                <div className="font-semibold mb-1">🔍 자동 채널 탐색</div>
+                                <div className="text-sm opacity-80">조건을 설정하여 YouTube에서 채널을 자동으로 찾습니다</div>
+                            </div>
+                        </button>
+                        <button
+                            onClick={() => setActiveChannelMethod('manual')}
+                            className={`flex-1 p-4 rounded-lg border-2 transition-all duration-200 ${
+                                activeChannelMethod === 'manual' 
+                                    ? 'border-green-500 bg-green-500/20 text-green-400' 
+                                    : 'border-slate-600 bg-slate-700/50 text-slate-300 hover:border-slate-500'
+                            }`}
+                        >
+                            <div className="text-left">
+                                <div className="font-semibold mb-1">✏️ 직접 채널 입력</div>
+                                <div className="text-sm opacity-80">@핸들명을 직접 입력하여 원하는 채널을 추가합니다</div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                {/* Steps 2 & 3: Two column layout */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Step 2: Find Channels */}
+                    <div className={`transition-all duration-300 ${activeChannelMethod !== 'search' ? 'opacity-40 pointer-events-none' : ''}`}>
+                        <Step
+                        stepNumber={2}
+                        title="분석 대상 채널 탐색"
+                        description="특정 기준(구독자 수, 정렬 순서)에 맞는 채널을 자동으로 탐색하거나, 채널 ID를 수동으로 추가합니다."
+                        isComplete={step2Complete && activeChannelMethod === 'search'}
+                    >
                     <div className="space-y-6">
                         <div>
                             <label className="block text-base font-medium text-slate-300 mb-2">데이터 수집 모드</label>
@@ -1385,45 +1839,25 @@ const App: React.FC = () => {
                                 ))}
                             </div>
                         </div>
-                        <button
-                            onClick={handleFindChannels}
-                            disabled={!user || isFinding}
-                            className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-600 text-white font-bold px-4 rounded-lg transition-colors flex items-center justify-center text-lg h-[50px]"
-                        >
-                            {isFinding ? (
-                                <>
-                                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                    </svg>
-                                    {updateMode === 'existing' ? '기존 채널 확인 중...' : '신규 채널 탐색 중...'}
-                                </>
-                            ) : (
-                                updateMode === 'existing' 
-                                    ? `🔄 기존 ${existingChannelsCount}개 채널 선택` 
-                                    : '🔍 신규 채널 탐색 시작'
-                            )}
-                        </button>
                     </div>
                 </Step>
+                    </div>
                 
                 {/* Step 3: Confirm Target Channels */}
-                <Step
-                    stepNumber={3}
-                    title="직접 채널 입력"
-                    description="탐색된 채널 목록을 확인하고, 원하는 채널의 @핸들을 직접 입력하여 추가하거나 제거할 수 있습니다."
-                    isComplete={step3Complete}
-                    collapsible={true}
-                    isOpen={isStep3Open}
-                    onToggle={() => setIsStep3Open(!isStep3Open)}
-                >
+                <div className={`transition-all duration-300 ${activeChannelMethod !== 'manual' ? 'opacity-40 pointer-events-none' : ''}`}>
+                    <Step
+                        stepNumber={3}
+                        title="직접 채널 입력"
+                        description="탐색된 채널 목록을 확인하고, 원하는 채널의 @핸들을 직접 입력하여 추가하거나 제거할 수 있습니다."
+                        isComplete={step3Complete && activeChannelMethod === 'manual'}
+                    >
                     <div className="space-y-4">
                         <div className="flex flex-col gap-2">
                             <input
                                 type="text"
                                 value={manualChannelHandle}
                                 onChange={(e) => setManualChannelHandle(e.target.value)}
-                                placeholder="채널 @핸들 입력 (예: @MrBeast)"
+                                placeholder="채널 @핸들 입력 (예: @MrBeast, @Cocomelon, @T-Series) - 콤마로 구분하여 여러 개 가능"
                                 className="flex-grow bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
                             />
                             <button 
@@ -1454,16 +1888,11 @@ const App: React.FC = () => {
                                 <p className="text-slate-500 text-center text-base py-4">처리할 채널이 없습니다.</p>
                             )}
                         </div>
-                        <p className="text-base text-slate-400">총 {targetChannelIds.length}개 채널 선택됨</p>
-                        <button
-                            onClick={handleConfirmTargetChannels}
-                            disabled={step3Complete || targetChannelIds.length === 0}
-                            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-bold px-4 rounded-lg transition-colors text-lg h-[50px] flex items-center justify-center"
-                        >
-                           {step3Complete ? '대상 확정 완료' : '이 채널들로 확정'}
-                        </button>
+                        <p className="text-base text-slate-400">총 {targetChannelIds.length}개 채널 선택됨 {step3Complete && <span className="text-green-400">✓ 자동 확정됨</span>}</p>
                     </div>
                 </Step>
+                </div>
+                </div>
 
                 {/* Step 4: Select Data Fields */}
                  <Step
@@ -1527,9 +1956,12 @@ const App: React.FC = () => {
                         </div>
 
                         <div>
-                            <h3 className="text-xl font-semibold text-slate-100 mb-3 border-b border-slate-600 pb-2">
-                                응용 데이터 (가공) <span className="text-base font-normal text-slate-400 ml-2">({appliedFields.size} / {totalAppliedFields})</span>
-                            </h3>
+                            <div className="flex items-center justify-between mb-3 border-b border-slate-600 pb-2">
+                                <h3 className="text-xl font-semibold text-slate-100">
+                                    응용 데이터 (가공) <span className="text-base font-normal text-slate-400 ml-2">({appliedFields.size} / {totalAppliedFields})</span>
+                                </h3>
+                                <InfoButton onClick={() => setShowFieldMappingModal(true)} />
+                            </div>
                             <p className="text-base text-slate-400 mb-4">API로부터 수집된 기본 데이터를 바탕으로 계산되는 2차 지표입니다.</p>
                             
                             <div className="flex flex-wrap gap-2 mb-4">
@@ -1584,6 +2016,11 @@ const App: React.FC = () => {
                                                         <p className={`text-sm text-sky-300/80 mt-1 font-mono ${field.id === 'viralIndex' ? 'whitespace-pre-line' : ''}`}>
                                                             {field.id} = {field.id === 'viralIndex' ? field.example : JSON.stringify(field.example)}
                                                         </p>
+                                                        <div className="mt-2 pt-2 border-t border-slate-600">
+                                                            <p className="text-2xl font-bold text-yellow-400 text-center">
+                                                                {getShortKey(field.id)}
+                                                            </p>
+                                                        </div>
                                                     </div>
                                                 </label>
                                             ))}
@@ -1606,8 +2043,40 @@ const App: React.FC = () => {
                                 disabled={step4Complete || selectedFields.size === 0}
                                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-bold px-4 rounded-lg transition-colors text-lg h-[50px] flex items-center justify-center"
                             >
-                            {step4Complete ? '필드 선택 완료' : '이 필드로 확정하고 처리 시작'}
+                            처리 시작
                             </button>
+                            
+                            {/* 진행상황 표시 */}
+                            {processingProgress.isActive && (
+                                <div className="mt-4 p-4 bg-slate-700 rounded-lg border border-slate-600">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="text-white font-medium">처리 진행상황</span>
+                                        <span className="text-blue-400 font-bold">
+                                            {processingProgress.currentIndex}/{processingProgress.totalCount}
+                                        </span>
+                                    </div>
+                                    
+                                    {/* 프로그레스 바 */}
+                                    <div className="w-full bg-slate-600 rounded-full h-2 mb-3">
+                                        <div 
+                                            className="bg-blue-500 h-2 rounded-full transition-all duration-300" 
+                                            style={{ 
+                                                width: `${processingProgress.totalCount > 0 ? (processingProgress.currentIndex / processingProgress.totalCount) * 100 : 0}%` 
+                                            }}
+                                        ></div>
+                                    </div>
+                                    
+                                    {/* 현재 상태 */}
+                                    <div className="text-sm text-gray-300">
+                                        <div className="mb-1">
+                                            <span className="text-blue-400">현재 채널:</span> {processingProgress.currentChannelName || 'N/A'}
+                                        </div>
+                                        <div>
+                                            <span className="text-green-400">상태:</span> {processingProgress.currentStep}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </Step>
@@ -1616,28 +2085,23 @@ const App: React.FC = () => {
                  {(isProcessingStarted || allStepsComplete) && (
                     <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
                         <h3 className="text-xl font-semibold text-white mb-4">실행 및 로그</h3>
-                        <div className="flex gap-4 mb-4">
-                            {!isProcessing ? (
-                                <button onClick={handleStartProcess} disabled={!allStepsComplete} className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white font-bold px-4 rounded-lg transition-colors text-lg h-[50px] flex items-center justify-center">
-                                    처리 시작
-                                </button>
-                            ) : (
-                                <>
-                                    {isPaused ? (
-                                        <button onClick={handleResumeProcess} className="flex-1 bg-sky-600 hover:bg-sky-700 text-white font-bold px-4 rounded-lg transition-colors text-lg h-[50px] flex items-center justify-center">
-                                            재개
-                                        </button>
-                                    ) : (
-                                        <button onClick={handlePauseProcess} className="flex-1 bg-yellow-600 hover:bg-yellow-700 text-white font-bold px-4 rounded-lg transition-colors text-lg h-[50px] flex items-center justify-center">
-                                            일시정지
-                                        </button>
-                                    )}
-                                    <button onClick={handleStopProcess} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold px-4 rounded-lg transition-colors text-lg h-[50px] flex items-center justify-center">
-                                        중지
+                        {/* 처리 중일 때만 일시정지/재개/중지 버튼 표시 */}
+                        {isProcessing && (
+                            <div className="flex gap-4 mb-4">
+                                {isPaused ? (
+                                    <button onClick={handleResumeProcess} className="flex-1 bg-sky-600 hover:bg-sky-700 text-white font-bold px-4 rounded-lg transition-colors text-lg h-[50px] flex items-center justify-center">
+                                        재개
                                     </button>
-                                </>
-                            )}
-                        </div>
+                                ) : (
+                                    <button onClick={handlePauseProcess} className="flex-1 bg-yellow-600 hover:bg-yellow-700 text-white font-bold px-4 rounded-lg transition-colors text-lg h-[50px] flex items-center justify-center">
+                                        일시정지
+                                    </button>
+                                )}
+                                <button onClick={handleStopProcess} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold px-4 rounded-lg transition-colors text-lg h-[50px] flex items-center justify-center">
+                                    중지
+                                </button>
+                            </div>
+                        )}
                         <div className="bg-slate-900/50 rounded-md p-2 h-96 overflow-y-auto border border-slate-700 flex flex-col-reverse">
                             <div>
                                 {logs.map((log) => <LogItem key={log.id} log={log} />)}
@@ -1945,6 +2409,164 @@ const App: React.FC = () => {
                                     <p><span className="text-red-400 font-semibold">• 전체 롱폼이 아님:</span> 분석된 범위 내의 롱폼만 표시</p>
                                     <p><span className="text-orange-400 font-semibold">• 1000개 제한:</span> 대형 채널의 경우 최신 영상만 반영</p>
                                     <p><span className="text-yellow-400 font-semibold">• 상대적 지표:</span> 같은 분석 범위에서 비교해야 의미 있음</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Field Mapping Modal */}
+            {showFieldMappingModal && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={() => setShowFieldMappingModal(false)}>
+                    <div className="bg-slate-800 border border-slate-700 rounded-xl max-w-5xl w-full max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+                        <div className="p-6 border-b border-slate-700 flex justify-between items-center">
+                            <h3 className="text-2xl font-bold text-white">📋 응용 데이터 필드 매핑표</h3>
+                            <button onClick={() => setShowFieldMappingModal(false)} className="text-slate-400 hover:text-white text-2xl">&times;</button>
+                        </div>
+                        <div className="p-6 overflow-y-auto space-y-6">
+                            <div className="bg-gradient-to-r from-blue-600/20 to-purple-600/20 rounded-lg p-4">
+                                <h4 className="text-lg font-semibold text-white mb-2">🎯 용량 최적화 목적</h4>
+                                <p className="text-slate-200 mb-3">
+                                    시계열 데이터의 특성상 매일 스냅샷이 누적됩니다. 긴 변수명을 4글자로 축약하여 
+                                    <span className="text-green-400 font-semibold"> 연간 수십GB 용량을 절약</span>할 수 있습니다.
+                                </p>
+                                <div className="bg-slate-700 rounded p-3 text-sm">
+                                    <p className="text-yellow-300">예시: subscriberToViewRatioPercent (26자) → gsvr (4자) = 85% 절약</p>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                {/* Growth Metrics */}
+                                <div className="bg-slate-700/30 rounded-lg p-4">
+                                    <h4 className="text-lg font-semibold text-green-400 mb-3">📈 성장 지표 (g로 시작)</h4>
+                                    <div className="space-y-2 text-sm">
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">gavg</span>
+                                            <span className="text-slate-400">averageViewsPerVideo</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">gsub</span>
+                                            <span className="text-slate-400">subscribersPerVideo</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">gvps</span>
+                                            <span className="text-slate-400">viewsPerSubscriber</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">gage</span>
+                                            <span className="text-slate-400">channelAgeInDays</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">gupw</span>
+                                            <span className="text-slate-400">uploadsPerWeek</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">gspd</span>
+                                            <span className="text-slate-400">subsGainedPerDay</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">gvpd</span>
+                                            <span className="text-slate-400">viewsGainedPerDay</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">gspm</span>
+                                            <span className="text-slate-400">subsGainedPerMonth</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">gspy</span>
+                                            <span className="text-slate-400">subsGainedPerYear</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">gsvr</span>
+                                            <span className="text-slate-400">subscriberToViewRatioPercent</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">gvir</span>
+                                            <span className="text-slate-400">viralIndex</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Content Analysis */}
+                                <div className="bg-slate-700/30 rounded-lg p-4">
+                                    <h4 className="text-lg font-semibold text-orange-400 mb-3">📹 콘텐츠 분석 (c로 시작)</h4>
+                                    <div className="space-y-2 text-sm">
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">csct</span>
+                                            <span className="text-slate-400">shortsCount</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">clct</span>
+                                            <span className="text-slate-400">longformCount</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">csdr</span>
+                                            <span className="text-slate-400">totalShortsDuration</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* View Analysis */}
+                                <div className="bg-slate-700/30 rounded-lg p-4">
+                                    <h4 className="text-lg font-semibold text-purple-400 mb-3">👁️ 조회수 분석 (v로 시작)</h4>
+                                    <div className="space-y-2 text-sm">
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">vesv</span>
+                                            <span className="text-slate-400">estimatedShortsViews</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">vsvp</span>
+                                            <span className="text-slate-400">shortsViewsPercentage</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">velv</span>
+                                            <span className="text-slate-400">estimatedLongformViews</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-300">vlvp</span>
+                                            <span className="text-slate-400">longformViewsPercentage</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="bg-gradient-to-r from-green-600/20 to-blue-600/20 rounded-lg p-4">
+                                <h4 className="text-lg font-semibold text-white mb-2">📊 JSON 저장 구조</h4>
+                                <div className="bg-slate-800 rounded p-3 text-sm font-mono">
+                                    <pre className="text-green-400">{`{
+  "fieldMapping": {
+    "gavg": "averageViewsPerVideo (영상당 평균 조회수)",
+    "gsub": "subscribersPerVideo (구독 전환율 %)",
+    "gvps": "viewsPerSubscriber (구독자당 조회수)"
+  },
+  "snapshots": [
+    {
+      "ts": "2025-09-04T10:24:35.483Z",
+      "gavg": 104876115,
+      "gsub": 0.457,
+      "gvps": 21879
+    }
+  ]
+}`}</pre>
+                                </div>
+                            </div>
+
+                            <div className="bg-yellow-600/20 rounded-lg p-4">
+                                <h4 className="text-lg font-semibold text-yellow-400 mb-2">💡 축약 규칙</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                                    <div>
+                                        <span className="font-semibold text-green-400">Growth (g):</span>
+                                        <p className="text-slate-300">성장 지표 관련</p>
+                                    </div>
+                                    <div>
+                                        <span className="font-semibold text-orange-400">Content (c):</span>
+                                        <p className="text-slate-300">콘텐츠 분석 관련</p>
+                                    </div>
+                                    <div>
+                                        <span className="font-semibold text-purple-400">View (v):</span>
+                                        <p className="text-slate-300">조회수 분석 관련</p>
+                                    </div>
                                 </div>
                             </div>
                         </div>

@@ -108,8 +108,7 @@ export const createFolder = async (folderName: string, parentId: string): Promis
 
 export const updateOrCreateChannelFile = async (
     channelData: any, 
-    folderId: string, 
-    collectionInfo: any
+    folderId: string
 ): Promise<void> => {
     try {
         const fileName = `${channelData.channelId}.json`;
@@ -144,23 +143,16 @@ export const updateOrCreateChannelFile = async (
             existingData.snapshots.push(newSnapshot);
             totalSnapshots = existingData.snapshots.length;
             
-            // 메타데이터 업데이트
+            // 메타데이터 업데이트 (간소화된 3개 필드만)
             existingData.metadata = {
                 firstCollected: existingData.metadata?.firstCollected || newSnapshot.timestamp,
                 lastUpdated: newSnapshot.timestamp,
                 totalCollections: totalSnapshots
             };
 
-            // 수집 히스토리 업데이트
-            existingData.collectionHistory = existingData.collectionHistory || [];
-            existingData.collectionHistory.push({
-                collectedAt: newSnapshot.timestamp,
-                collectionInfo
-            });
-
             await updateJsonFile(existingFile.id, existingData);
         } else {
-            // 새 파일 생성
+            // 새 파일 생성 (간소화된 메타데이터)
             const newChannelData = {
                 channelId: channelData.channelId,
                 staticData: channelData.staticData,
@@ -169,11 +161,7 @@ export const updateOrCreateChannelFile = async (
                     firstCollected: newSnapshot.timestamp,
                     lastUpdated: newSnapshot.timestamp,
                     totalCollections: 1
-                },
-                collectionHistory: [{
-                    collectedAt: newSnapshot.timestamp,
-                    collectionInfo
-                }]
+                }
             };
             
             await createJsonFile(fileName, channelsFolder.id, newChannelData);

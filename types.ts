@@ -1,37 +1,60 @@
 
 export interface Snapshot {
-  timestamp: string;
+  ts: string; // timestamp -> ts
   subscriberCount?: string;
   viewCount?: string;
   videoCount?: string;
   hiddenSubscriberCount?: boolean;
-  // Applied Data
-  averageViewsPerVideo?: number;
-  subscribersPerVideo?: number;
-  viewsPerSubscriber?: number;
-  channelAgeInDays?: number;
-  uploadsPerWeek?: number;
-  uploadsPerMonth?: number;
-  subsGainedPerDay?: number;
-  viewsGainedPerDay?: number;
-  subscriberToViewRatioPercent?: number;
-  viralIndex?: number;
-  subsGainedPerMonth?: number;
-  subsGainedPerYear?: number;
+  // Applied Data - Short Keys
+  gavg?: number; // averageViewsPerVideo
+  gsub?: number; // subscribersPerVideo  
+  gvps?: number; // viewsPerSubscriber
+  gage?: number; // channelAgeInDays
+  gupw?: number; // uploadsPerWeek
+  gspd?: number; // subsGainedPerDay
+  gvpd?: number; // viewsGainedPerDay
+  gspm?: number; // subsGainedPerMonth
+  gspy?: number; // subsGainedPerYear
+  gsvr?: number; // subscriberToViewRatioPercent
+  gvir?: number; // viralIndex
   // Content Analysis
-  shortsCount?: number;
-  longformCount?: number;
-  totalShortsDuration?: number;
-  // View Analysis
-  estimatedShortsViews?: number;
-  shortsViewsPercentage?: number;
-  longformViewsPercentage?: number;
-  estimatedLongformViews?: number;
+  csct?: number; // shortsCount
+  clct?: number; // longformCount
+  csdr?: number; // totalShortsDuration
+  // View Analysis  
+  vesv?: number; // estimatedShortsViews
+  vsvp?: number; // shortsViewsPercentage
+  velv?: number; // estimatedLongformViews
+  vlvp?: number; // longformViewsPercentage
 }
 
 export interface ChannelData {
   channelId: string;
-  // Snippet
+  // Static Data
+  staticData?: {
+    title?: string;
+    description?: string;
+    customUrl?: string;
+    publishedAt?: string;
+    thumbnailUrl?: string;
+    thumbnailDefault?: string;
+    thumbnailMedium?: string;
+    thumbnailHigh?: string;
+    defaultLanguage?: string;
+    country?: string;
+    keywords?: string;
+    bannerExternalUrl?: string;
+    unsubscribedTrailer?: string;
+    uploadsPlaylistId?: string;
+    topicIds?: string[];
+    topicCategories?: string[];
+    privacyStatus?: string;
+    isLinked?: boolean;
+    longUploadsStatus?: string;
+    madeForKids?: boolean;
+    selfDeclaredMadeForKids?: boolean;
+  };
+  // Legacy fields for backwards compatibility
   title?: string;
   description?: string;
   customUrl?: string;
@@ -42,16 +65,12 @@ export interface ChannelData {
   thumbnailHigh?: string;
   defaultLanguage?: string;
   country?: string;
-  // Branding
   keywords?: string;
   bannerExternalUrl?: string;
   unsubscribedTrailer?: string;
-  // Content Details
   uploadsPlaylistId?: string;
-  // Topic Details
   topicIds?: string[];
   topicCategories?: string[];
-  // Status
   privacyStatus?: string;
   isLinked?: boolean;
   longUploadsStatus?: string;
@@ -59,6 +78,12 @@ export interface ChannelData {
   selfDeclaredMadeForKids?: boolean;
   // Snapshots
   snapshots: Snapshot[];
+  // Metadata (간소화된 구조)
+  metadata?: {
+    firstCollected: string;
+    lastUpdated: string;
+    totalCollections: number;
+  };
 }
 
 export interface GoogleUser {
