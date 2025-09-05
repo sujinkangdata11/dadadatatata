@@ -1434,7 +1434,7 @@ const App: React.FC = () => {
                         totalCollections: channelData.snapshots.length
                     };
                     
-                    await updateJsonFile(existingFile.id, channelData);
+                    // 파일 저장은 updateOrCreateChannelFile에서 처리
                 } else {
                     addLog(LogStatus.INFO, `새 파일 '${fileName}'을(를) 생성합니다.`);
                     channelData = {
@@ -1447,7 +1447,7 @@ const App: React.FC = () => {
                             totalCollections: 1
                         }
                     };
-                    await createJsonFile(fileName, folderId, channelData);
+                    // 파일 저장은 updateOrCreateChannelFile에서 처리
                 }
                 addLog(LogStatus.SUCCESS, `[${currentChannelIndex.current + 1}/${targetChannelIds.length}] ${channelId} 처리 완료. Drive에 저장되었습니다.`);
 
@@ -1475,9 +1475,8 @@ const App: React.FC = () => {
             });
         };
         
-        // Start immediately, then set interval
+        // Start immediately (one-time execution)
         run();
-        processingInterval.current = setInterval(run, 5000); // 5초 간격
 
     }, [isProcessing, isPaused, targetChannelIds, addLog, youtubeApiKey, selectedFields, appliedFields]);
 
