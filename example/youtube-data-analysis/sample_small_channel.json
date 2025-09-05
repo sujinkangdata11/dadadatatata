@@ -1,0 +1,46 @@
+{
+  "channelId": "UCgPLO83HEW6OrwJmMiFOkgA",
+  "staticData": {
+    "title": "Leo Grundström",
+    "description": "Tech reviews and tutorials",
+    "customUrl": "@grundstrombiz",
+    "publishedAt": "2025-03-15T18:46:16.729934Z",
+    "thumbnailDefault": "https://yt3.ggpht.com/pYWpboG6I0LyeVFKoCKubct-H5WtlGlW1Xs3sLZII_qDhItob-v6iK9vVyXJYzYzUAWh1wWfxHw=s88-c-k-c0x00ffffff-no-rj",
+    "uploadsPlaylistId": "UUgPLO83HEW6OrwJmMiFOkgA",
+    "topicCategories": [
+      "https://en.wikipedia.org/wiki/Technology",
+      "https://en.wikipedia.org/wiki/Knowledge",
+      "https://en.wikipedia.org/wiki/Lifestyle_(sociology)"
+    ]
+  },
+  "snapshots": [
+    {
+      "ts": "2025-09-04T16:28:18.228Z",
+      "subscriberCount": "11300",
+      "viewCount": "316804",
+      "videoCount": "44",
+      "gavg": 7200,
+      "gsub": 3.5669,
+      "gvps": 2803.58,
+      "gage": 172,
+      "gupw": 1.79,
+      "gspd": 66,
+      "gvpd": 1842,
+      "gspm": 2000,
+      "gspy": 23996,
+      "gvir": 357,
+      "csct": 17,
+      "clct": 27,
+      "csdr": 1020,
+      "vesv": 21284,
+      "vsvp": 6.72,
+      "velv": 295520,
+      "vlvp": 93.28
+    }
+  ],
+  "metadata": {
+    "firstCollected": "2025-09-04T16:28:19.161Z",
+    "lastUpdated": "2025-09-04T16:28:19.161Z",
+    "totalCollections": 1
+  }
+}

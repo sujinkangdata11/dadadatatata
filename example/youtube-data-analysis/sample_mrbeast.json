@@ -1,0 +1,46 @@
+{
+  "channelId": "UCX6OQ3DkcsbYNE6H8uQQuVA",
+  "staticData": {
+    "title": "MrBeast",
+    "description": "I want to make the best videos possible!",
+    "customUrl": "@MrBeast",
+    "publishedAt": "2012-02-20T00:43:50Z",
+    "country": "US",
+    "thumbnailDefault": "https://yt3.ggpht.com/nxYrc_1_2f77DoBadyxMTmv7ZpRZapHR5jbuYe7PlPd5cIRJxtNNEYyOC0ZsxaDyJJzXrnJiuDE=s88-c-k-c0x00ffffff-no-rj",
+    "uploadsPlaylistId": "UUX6OQ3DkcsbYNE6H8uQQuVA",
+    "topicCategories": [
+      "https://en.wikipedia.org/wiki/Entertainment",
+      "https://en.wikipedia.org/wiki/Lifestyle_(sociology)"
+    ]
+  },
+  "snapshots": [
+    {
+      "ts": "2025-09-05T01:59:00.633Z",
+      "subscriberCount": "431000000",
+      "viewCount": "94111043985",
+      "videoCount": "897",
+      "gavg": 104917552,
+      "gsub": 0.458,
+      "gvps": 21835.51,
+      "gage": 4946,
+      "gupw": 1.27,
+      "gspd": 87141,
+      "gvpd": 19027708,
+      "gspm": 2652576,
+      "gspy": 31828296,
+      "gvir": 151,
+      "csct": 141,
+      "clct": 756,
+      "csdr": 8460,
+      "vesv": 46231285654,
+      "vsvp": 49.12,
+      "velv": 47879758331,
+      "vlvp": 50.88
+    }
+  ],
+  "metadata": {
+    "firstCollected": "2025-09-05T01:59:09.855Z",
+    "lastUpdated": "2025-09-05T01:59:09.855Z",
+    "totalCollections": 1
+  }
+}

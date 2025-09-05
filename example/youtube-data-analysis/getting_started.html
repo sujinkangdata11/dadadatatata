@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube 채널 데이터 분석 - 시작하기</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #FF0000;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .channel-card {
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            background: #fafafa;
+        }
+        .channel-card.big-channel {
+            border-color: #FF6B6B;
+            background: #FFF5F5;
+        }
+        .channel-card.small-channel {
+            border-color: #4ECDC4;
+            background: #F0FDFC;
+        }
+        .channel-title {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 15px 0;
+        }
+        .stat-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #FF0000;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .stat-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+        .code-section {
+            background: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .code-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        pre {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+        }
+        button {
+            background: #FF0000;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #CC0000;
+        }
+        .tips {
+            background: #E3F2FD;
+            border: 1px solid #2196F3;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .tips h3 {
+            margin-top: 0;
+            color: #1976D2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 YouTube 채널 데이터 분석 시작하기</h1>
+        
+        <div class="tips">
+            <h3>💡 20년차 시니어의 팁</h3>
+            <p><strong>이 예제는 브라우저에서 바로 실행됩니다!</strong></p>
+            <p>F12를 눌러 개발자 도구를 열고 Console 탭을 확인하세요. 더 자세한 데이터를 볼 수 있습니다.</p>
+        </div>
+
+        <div class="code-section">
+            <div class="code-title">🔥 실시간 데이터 분석 결과</div>
+            <button onclick="loadMrBeast()">MrBeast 데이터 로드</button>
+            <button onclick="loadSmallChannel()">작은 채널 데이터 로드</button>
+            <button onclick="compareChannels()">채널 비교 분석</button>
+        </div>
+
+        <div id="results"></div>
+
+        <div class="code-section">
+            <div class="code-title">📝 핵심 파싱 코드</div>
+<pre>
+// 1단계: JSON 파싱
+const channelData = JSON.parse(jsonString);
+
+// 2단계: 최신 스냅샷 가져오기
+const latest = channelData.snapshots[0];
+
+// 3단계: 데이터 출력
+console.log(`채널명: ${channelData.staticData.title}`);
+console.log(`구독자: ${latest.subscriberCount?.toLocaleString()}명`);
+console.log(`평균 조회수: ${latest.gavg?.toLocaleString()}회`);
+</pre>
+        </div>
+
+        <div class="tips">
+            <h3>🚀 다음 단계</h3>
+            <ul>
+                <li><strong>types.ts 파일 확인</strong> - 모든 필드의 설명이 있어요</li>
+                <li><strong>sample_*.json 파일들</strong> - 실제 데이터 구조를 확인해보세요</li>
+                <li><strong>parsing_examples.js</strong> - 고급 파싱 기법들을 배워보세요</li>
+                <li><strong>차트 라이브러리 추가</strong> - Chart.js나 D3.js로 시각화해보세요</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // MrBeast 데이터 (실제 데이터)
+        const mrBeastData = {
+            "channelId": "UCX6OQ3DkcsbYNE6H8uQQuVA",
+            "staticData": {
+                "title": "MrBeast",
+                "customUrl": "@MrBeast",
+                "country": "US"
+            },
+            "snapshots": [{
+                "ts": "2025-09-05T01:59:00.633Z",
+                "subscriberCount": "431000000",
+                "viewCount": "94111043985",
+                "videoCount": "897",
+                "gavg": 104917552,
+                "gsub": 0.458,
+                "gvps": 21835.51,
+                "gage": 4946,
+                "gupw": 1.27,
+                "gspd": 87141,
+                "gvpd": 19027708,
+                "gspm": 2652576,
+                "gspy": 31828296,
+                "gvir": 151,
+                "csct": 141,
+                "clct": 756,
+                "csdr": 8460,
+                "vesv": 46231285654,
+                "vsvp": 49.12,
+                "velv": 47879758331,
+                "vlvp": 50.88
+            }]
+        };
+
+        // 작은 채널 데이터
+        const smallChannelData = {
+            "channelId": "UCgPLO83HEW6OrwJmMiFOkgA",
+            "staticData": {
+                "title": "Leo Grundström",
+                "customUrl": "@grundstrombiz"
+            },
+            "snapshots": [{
+                "ts": "2025-09-04T16:28:18.228Z",
+                "subscriberCount": "11300",
+                "viewCount": "316804",
+                "videoCount": "44",
+                "gavg": 7200,
+                "gsub": 3.5669,
+                "gvps": 2803.58,
+                "gage": 172,
+                "gupw": 1.79,
+                "gspd": 66,
+                "gvpd": 1842,
+                "gspm": 2000,
+                "gspy": 23996,
+                "gvir": 357,
+                "csct": 17,
+                "clct": 27,
+                "csdr": 1020,
+                "vesv": 21284,
+                "vsvp": 6.72,
+                "velv": 295520,
+                "vlvp": 93.28
+            }]
+        };
+
+        function formatNumber(num) {
+            if (!num) return '0';
+            return parseInt(num).toLocaleString();
+        }
+
+        function createChannelCard(data, className = '') {
+            const latest = data.snapshots[0];
+            const card = document.createElement('div');
+            card.className = `channel-card ${className}`;
+            
+            card.innerHTML = `
+                <div class="channel-title">
+                    📺 ${data.staticData.title} (${data.staticData.customUrl})
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">구독자 수</div>
+                        <div class="stat-value">${formatNumber(latest.subscriberCount)}명</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">총 조회수</div>
+                        <div class="stat-value">${formatNumber(latest.viewCount)}회</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">영상 개수</div>
+                        <div class="stat-value">${formatNumber(latest.videoCount)}개</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">영상당 평균 조회수 (gavg)</div>
+                        <div class="stat-value">${formatNumber(latest.gavg)}회</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">구독 전환율 (gsub)</div>
+                        <div class="stat-value">${latest.gsub}%</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">바이럴 지수 (gvir)</div>
+                        <div class="stat-value">${latest.gvir}</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">숏폼 vs 롱폼</div>
+                        <div class="stat-value">${latest.csct} vs ${latest.clct}개</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">하루 구독자 증가 (gspd)</div>
+                        <div class="stat-value">+${formatNumber(latest.gspd)}명</div>
+                    </div>
+                </div>
+            `;
+            
+            return card;
+        }
+
+        function loadMrBeast() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+            resultsDiv.appendChild(createChannelCard(mrBeastData, 'big-channel'));
+            
+            console.log('🔥 MrBeast 데이터 분석:');
+            console.log('채널명:', mrBeastData.staticData.title);
+            console.log('구독자:', parseInt(mrBeastData.snapshots[0].subscriberCount).toLocaleString(), '명');
+            console.log('영상당 평균 조회수:', mrBeastData.snapshots[0].gavg.toLocaleString(), '회');
+            console.log('바이럴 지수:', mrBeastData.snapshots[0].gvir);
+            console.log('전체 데이터:', mrBeastData);
+        }
+
+        function loadSmallChannel() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+            resultsDiv.appendChild(createChannelCard(smallChannelData, 'small-channel'));
+            
+            console.log('🚀 작은 채널 데이터 분석:');
+            console.log('채널명:', smallChannelData.staticData.title);
+            console.log('구독자:', parseInt(smallChannelData.snapshots[0].subscriberCount).toLocaleString(), '명');
+            console.log('영상당 평균 조회수:', smallChannelData.snapshots[0].gavg.toLocaleString(), '회');
+            console.log('바이럴 지수:', smallChannelData.snapshots[0].gvir);
+            console.log('전체 데이터:', smallChannelData);
+        }
+
+        function compareChannels() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<h2>📊 채널 비교 분석</h2>';
+            resultsDiv.appendChild(createChannelCard(mrBeastData, 'big-channel'));
+            resultsDiv.appendChild(createChannelCard(smallChannelData, 'small-channel'));
+            
+            const mrBeastSnapshot = mrBeastData.snapshots[0];
+            const smallSnapshot = smallChannelData.snapshots[0];
+            
+            const comparison = document.createElement('div');
+            comparison.className = 'code-section';
+            comparison.innerHTML = `
+                <div class="code-title">🔍 비교 분석 결과</div>
+                <ul>
+                    <li><strong>구독자 차이:</strong> ${(parseInt(mrBeastSnapshot.subscriberCount) / parseInt(smallSnapshot.subscriberCount)).toFixed(1)}배</li>
+                    <li><strong>영상당 평균 조회수 차이:</strong> ${(mrBeastSnapshot.gavg / smallSnapshot.gavg).toFixed(1)}배</li>
+                    <li><strong>바이럴 지수 비교:</strong> MrBeast ${mrBeastSnapshot.gvir} vs Leo ${smallSnapshot.gvir}</li>
+                    <li><strong>구독 전환율:</strong> MrBeast ${mrBeastSnapshot.gsub}% vs Leo ${smallSnapshot.gsub}%</li>
+                    <li><strong>콘텐츠 전략:</strong> 
+                        <br>• MrBeast: 숏폼 ${mrBeastSnapshot.vsvp}% vs 롱폼 ${mrBeastSnapshot.vlvp}%
+                        <br>• Leo: 숏폼 ${smallSnapshot.vsvp}% vs 롱폼 ${smallSnapshot.vlvp}%
+                    </li>
+                </ul>
+            `;
+            resultsDiv.appendChild(comparison);
+            
+            console.log('📊 채널 비교 분석 완료!');
+            console.log('구독자 비율:', (parseInt(mrBeastSnapshot.subscriberCount) / parseInt(smallSnapshot.subscriberCount)).toFixed(1), '배');
+            console.log('MrBeast 데이터:', mrBeastData);
+            console.log('작은 채널 데이터:', smallChannelData);
+        }
+
+        // 페이지 로드시 환영 메시지
+        console.log('🎉 YouTube 채널 데이터 분석 도구에 오신 것을 환영합니다!');
+        console.log('💡 버튼을 클릭해서 데이터를 분석해보세요.');
+        console.log('📚 types.ts 파일에서 모든 필드 설명을 확인할 수 있습니다.');
+    </script>
+</body>
+</html>
