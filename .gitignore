@@ -33,3 +33,8 @@ dist-ssr
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Service Account and API keys (server folder)
+server/service-account-key.txt
+server/kv-data.json
+server/.wrangler/
