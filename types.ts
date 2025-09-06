@@ -1,7 +1,15 @@
 
 export interface Snapshot {
   ts: string; // timestamp -> ts
-  subscriberCount?: string;
+  // 기본 채널 정보 (변경 가능)
+  title?: string;
+  customUrl?: string;
+  thumbnailUrl?: string;
+  thumbnailDefault?: string;
+  thumbnailMedium?: string;
+  thumbnailHigh?: string;
+  // 수치 데이터 (계산용으로는 포함, 저장할 때만 제외)
+  subscriberCount?: string; // 계산에는 필요하지만 저장 시 subscriberHistory로 이동
   viewCount?: string;
   videoCount?: string;
   hiddenSubscriberCount?: boolean;
@@ -28,33 +36,28 @@ export interface Snapshot {
   vlvp?: number; // longformViewsPercentage
 }
 
+export interface SubscriberHistoryEntry {
+  month: string; // "2024-09" 형태
+  count: string; // 구독자 수
+}
+
 export interface ChannelData {
   channelId: string;
-  // Static Data
+  // Static Data (절대 안바뀌는 것만)
   staticData?: {
-    title?: string;
-    description?: string;
-    customUrl?: string;
-    publishedAt?: string;
-    thumbnailUrl?: string;
-    thumbnailDefault?: string;
-    thumbnailMedium?: string;
-    thumbnailHigh?: string;
-    defaultLanguage?: string;
-    country?: string;
-    keywords?: string;
-    bannerExternalUrl?: string;
-    unsubscribedTrailer?: string;
-    uploadsPlaylistId?: string;
-    topicIds?: string[];
-    topicCategories?: string[];
-    privacyStatus?: string;
-    isLinked?: boolean;
-    longUploadsStatus?: string;
-    madeForKids?: boolean;
-    selfDeclaredMadeForKids?: boolean;
+    publishedAt?: string; // 채널 생성날짜만
   };
-  // Legacy fields for backwards compatibility
+  // Snapshots (최신 1개만, subscriberCount 제외)
+  snapshots: Snapshot[];
+  // Subscriber History (월별 5개 유지)
+  subscriberHistory?: SubscriberHistoryEntry[];
+  // Metadata (간소화된 구조)
+  metadata?: {
+    firstCollected: string;
+    lastUpdated: string;
+    totalCollections: number;
+  };
+  // Legacy fields for backwards compatibility (deprecated)
   title?: string;
   description?: string;
   customUrl?: string;
@@ -76,14 +79,6 @@ export interface ChannelData {
   longUploadsStatus?: string;
   madeForKids?: boolean;
   selfDeclaredMadeForKids?: boolean;
-  // Snapshots
-  snapshots: Snapshot[];
-  // Metadata (간소화된 구조)
-  metadata?: {
-    firstCollected: string;
-    lastUpdated: string;
-    totalCollections: number;
-  };
 }
 
 export interface GoogleUser {

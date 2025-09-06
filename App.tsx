@@ -76,6 +76,7 @@ const apiDataFields: { group: string; fields: ApiDataField[] }[] = [
       { id: 'title', label: '채널 제목', example: 'MrBeast' },
       { id: 'description', label: '채널 설명', example: 'I make videos, subscribe or I will chase you.' },
       { id: 'customUrl', label: '사용자 지정 URL', example: '@MrBeast' },
+      { id: 'channelUrl', label: '채널 URL', example: 'https://www.youtube.com/channel/UCX6OQ3DkcsbYNE6H8uQQuVA' },
       { id: 'publishedAt', label: '채널 개설일', example: '2012-02-20T13:42:00Z' },
       { id: 'country', label: '국가', example: 'US' },
       { id: 'defaultLanguage', label: '기본 언어', example: 'en' },
@@ -289,6 +290,18 @@ const App: React.FC = () => {
     // 2번/3번 블럭 토글 상태 (기본적으로 2번 블럭이 활성화)
     const [activeChannelMethod, setActiveChannelMethod] = useState<'search' | 'manual'>('search');
 
+    // Danbi CSV 배치 처리를 위한 상태들
+    const [danbiProgress, setDanbiProgress] = useState({ complete: 0, total: 35446, lastUpdated: null, comments: '' });
+    const [isDanbiBatchRunning, setIsDanbiBatchRunning] = useState(false);
+    const [danbiCsvData, setDanbiCsvData] = useState<any[]>([]);
+    const [csvFile, setCsvFile] = useState<File | null>(null);
+    const [completeJsonFile, setCompleteJsonFile] = useState<File | null>(null);
+    const [isProcessingCsv, setIsProcessingCsv] = useState(false);
+    const [updatedCompleteJson, setUpdatedCompleteJson] = useState<string | null>(null);
+    const [isDanbiMode, setIsDanbiMode] = useState(false);
+    const [isDanbiAnalyzing, setIsDanbiAnalyzing] = useState(false);
+    const [danbiStartIndex, setDanbiStartIndex] = useState(0);
+
     const [step4Complete, setStep4Complete] = useState(false);
     
     // 진행상황 추적 상태
@@ -299,12 +312,13 @@ const App: React.FC = () => {
         currentStep: '',
         isActive: false
     });
-    // 디폴트로 "옵션값 1" 10개 필드 모두 선택 (채널제목, 개설일, 국가, 지정URL, 프로필아이콘88×88, 구독자수, 총영상수, 총조회수, 토픽카테고리, 업로드플레이리스트ID)
+    // 디폴트로 "옵션값 1" 11개 필드 모두 선택 (채널제목, 개설일, 국가, 지정URL, 채널URL, 프로필아이콘88×88, 구독자수, 총영상수, 총조회수, 토픽카테고리, 업로드플레이리스트ID)
     const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set([
         'title',              // 채널제목
         'publishedAt',        // 개설일
         'country',           // 국가
         'customUrl',         // 지정URL
+        'channelUrl',        // 채널URL
         'thumbnailDefault',  // 프로필아이콘 (88×88)
         'subscriberCount',   // 구독자수
         'videoCount',        // 총영상수
@@ -324,16 +338,17 @@ const App: React.FC = () => {
         'viewsGainedPerDay',        // 7. 일일 평균 조회수 증가
         'subsGainedPerMonth',       // 8. 월간 평균 구독자 증가
         'subsGainedPerYear',        // 9. 연간 평균 구독자 증가
-        'viralIndex',               // 10. 바이럴 지수
+        'subscriberToViewRatioPercent', // 10. 구독자-조회수 비율 (%)
+        'viralIndex',               // 11. 바이럴 지수
         // 콘텐츠 분석 - 3개
-        'shortsCount',              // 11. 숏폼 갯수
-        'longformCount',            // 12. 롱폼 갯수
-        'totalShortsDuration',      // 13. 숏폼 총 영상 길이 (추정)
+        'shortsCount',              // 12. 숏폼 갯수
+        'longformCount',            // 13. 롱폼 갯수
+        'totalShortsDuration',      // 14. 숏폼 총 영상 길이 (추정)
         // 조회수 분석 (추정) - 4개
-        'estimatedShortsViews',     // 14. 숏폼 총 조회수 (실제)
-        'shortsViewsPercentage',    // 15. 숏폼 조회수 비중 (%)
-        'estimatedLongformViews',   // 16. 롱폼 총 조회수 (실제)
-        'longformViewsPercentage'   // 17. 롱폼 조회수 비중 (%)
+        'estimatedShortsViews',     // 15. 숏폼 총 조회수 (실제)
+        'shortsViewsPercentage',    // 16. 숏폼 조회수 비중 (%)
+        'estimatedLongformViews',   // 17. 롱폼 총 조회수 (실제)
+        'longformViewsPercentage'   // 18. 롱폼 조회수 비중 (%)
     ]));
     const [showExampleModal, setShowExampleModal] = useState(false);
     const [exampleJson, setExampleJson] = useState('');
@@ -403,6 +418,45 @@ const App: React.FC = () => {
             addLog(LogStatus.INFO, 'Google 계정에서 로그아웃되었습니다.');
         }
     }, [addLog]);
+
+    // Danbi CSV 파일 및 진행상황 로드
+    useEffect(() => {
+        const loadDanbiData = async () => {
+            try {
+                // CSV 파일 로드
+                const csvResponse = await fetch('./danbi_channels.csv');
+                const csvText = await csvResponse.text();
+                const lines = csvText.trim().split('\n');
+                const headers = lines[0].split(',');
+                const data = lines.slice(1).map(line => {
+                    const values = line.split(',');
+                    return {
+                        channel_name: values[0],
+                        profile_url: values[1],
+                        source_url: values[2]
+                    };
+                });
+                setDanbiCsvData(data);
+                
+                // 진행상황 파일 로드
+                try {
+                    const progressResponse = await fetch('./danbi_complete.json');
+                    const progressData = await progressResponse.json();
+                    setDanbiProgress(progressData);
+                } catch (error) {
+                    console.log('danbi_complete.json이 없거나 읽을 수 없습니다. 기본값 사용.');
+                    setDanbiProgress({ complete: 0, total: data.length, lastUpdated: null, comments: '0까지 완료되었음. 1부터 시작' });
+                }
+            } catch (error) {
+                console.error('Danbi CSV 로드 실패:', error);
+                addLog(LogStatus.ERROR, 'danbi_channels.csv 파일을 로드할 수 없습니다.');
+            }
+        };
+        
+        if (updateMode === 'danbi_batch') {
+            loadDanbiData();
+        }
+    }, [updateMode, addLog]);
 
     const handleLogin = useCallback(() => {
         console.log("`handleLogin` 함수가 호출되었습니다.");
@@ -820,6 +874,218 @@ const App: React.FC = () => {
         });
     };
 
+    // CSV 파일 처리 함수
+    const handleCsvUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        setCsvFile(file);
+        
+        try {
+            const text = await file.text();
+            const lines = text.trim().split('\n');
+            
+            // 헤더 제거하고 데이터 파싱
+            const channels = lines.slice(1).map((line, index) => {
+                const [channel_name, profile_url, source_url] = line.split(',');
+                
+                // URL에서 채널 ID 추출
+                const urlParts = profile_url?.split('/') || [];
+                const channelId = urlParts[urlParts.length - 1];
+                
+                return {
+                    index: index + 1,
+                    channel_name: channel_name?.trim() || '',
+                    profile_url: profile_url?.trim() || '',
+                    source_url: source_url?.trim() || '',
+                    channelId: channelId?.trim() || ''
+                };
+            }).filter(channel => channel.channelId); // 유효한 채널 ID가 있는 것만
+
+            setDanbiCsvData(channels);
+            addLog(LogStatus.SUCCESS, `📂 CSV 파일 로드 완료: ${channels.length}개 채널 (${file.name})`);
+
+        } catch (error) {
+            addLog(LogStatus.ERROR, `CSV 파일 처리 오류: ${error.message}`);
+        }
+    };
+
+    // danbi_complete.json 파일 처리 함수
+    const handleCompleteJsonUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        setCompleteJsonFile(file);
+        
+        try {
+            const text = await file.text();
+            const progressData = JSON.parse(text);
+            setDanbiProgress(progressData);
+            
+            addLog(LogStatus.SUCCESS, `📋 진행상황 파일 로드 완료: ${progressData.complete}/${progressData.total} (${file.name})`);
+            addLog(LogStatus.INFO, `💭 ${progressData.comments}`);
+
+        } catch (error) {
+            addLog(LogStatus.ERROR, `진행상황 파일 처리 오류: ${error.message}`);
+        }
+    };
+
+    // 단비 CSV 채널 ID 확인 함수
+    const handleDanbiCsvCheck = async () => {
+        if (danbiCsvData.length === 0) {
+            addLog(LogStatus.ERROR, 'CSV 파일을 먼저 업로드해주세요.');
+            return;
+        }
+
+        if (!completeJsonFile) {
+            addLog(LogStatus.ERROR, 'danbi_complete.json 파일을 먼저 업로드해주세요.');
+            return;
+        }
+        
+        // 로딩 시작
+        setIsDanbiAnalyzing(true);
+        addLog(LogStatus.PENDING, '📊 Danbi CSV 분석 중...');
+        
+        // 진행상황 분석 - 주석을 통해 다음 처리할 번호 결정
+        let startIndex = danbiProgress.complete;
+        let nextNumber = startIndex + 1;
+        
+        // 주석 분석을 통한 시작 위치 결정
+        if (danbiProgress.comments) {
+            if (danbiProgress.comments.includes('진행중 오류')) {
+                // 오류가 발생한 경우 해당 번호부터 다시 시작
+                nextNumber = startIndex + 1;
+                addLog(LogStatus.WARNING, `⚠️ 이전 오류 발생 감지 - ${nextNumber}번부터 재시작 예정`);
+            } else if (danbiProgress.comments.includes('완료')) {
+                // 정상 완료된 경우 다음 번호부터 시작
+                nextNumber = startIndex + 1;
+                addLog(LogStatus.SUCCESS, `✅ ${startIndex}번까지 완료됨 - ${nextNumber}번부터 시작 예정`);
+            }
+        } else if (startIndex === 0) {
+            // 처음 시작하는 경우
+            nextNumber = 1;
+            addLog(LogStatus.INFO, `🆕 새로운 배치 처리 - 1번부터 시작 예정`);
+        }
+
+        // 단비 CSV 데이터를 targetChannelIds에 설정 (다음 번호부터)
+        const remainingChannels = danbiCsvData.slice(startIndex);
+        const channelIds = remainingChannels.map(channel => channel.channelId);
+        setTargetChannelIds(channelIds);
+        
+        // 단비 모드 활성화
+        setIsDanbiMode(true);
+        setDanbiStartIndex(startIndex);
+        
+        // 진행상황 정보 로그
+        addLog(LogStatus.SUCCESS, `📊 단비 CSV 분석 완료!`);
+        addLog(LogStatus.INFO, `📂 총 ${danbiCsvData.length}개 채널 중 ${startIndex}개 완료됨`);
+        addLog(LogStatus.INFO, `▶️ ${nextNumber}번부터 ${danbiCsvData.length}번까지 ${remainingChannels.length}개 채널 처리 예정`);
+        addLog(LogStatus.INFO, `💡 아래 "처리 시작" 버튼을 눌러 실제 배치 처리를 시작하세요.`);
+        
+        // Step 3 완료 표시 및 단비 모드 표시
+        setStep3Complete(true);
+        
+        // 로딩 완료
+        setIsDanbiAnalyzing(false);
+    };
+
+    // 순차 처리 함수
+    const processDanbiChannelsSequentially = async (startIndex: number) => {
+        const preset1Fields = new Set([
+            'title', 'publishedAt', 'country', 'customUrl', 'channelUrl', 'thumbnailDefault',
+            'subscriberCount', 'videoCount', 'viewCount', 'topicCategories', 'uploadsPlaylistId'
+        ]);
+
+        for (let i = startIndex; i < danbiCsvData.length; i++) {
+            const channel = danbiCsvData[i];
+            const channelNumber = i + 1;
+
+            try {
+                addLog(LogStatus.PENDING, `[${channelNumber}/${danbiCsvData.length}] 처리 중: ${channel.channel_name} (${channel.channelId})`);
+
+                // 1. YouTube 데이터 추출
+                const result = await fetchSelectedChannelData(channel.channelId, youtubeApiKey, preset1Fields);
+                
+                // 2. 데이터 구조화
+                const channelData = {
+                    channelId: channel.channelId,
+                    staticData: result.staticData,
+                    snapshot: result.snapshotData
+                };
+
+                // 3. Google Drive 저장
+                await updateOrCreateChannelFile(channelData, selectedFolder.id || 'root');
+
+                // 4. 진행상황 업데이트
+                const newProgress = {
+                    complete: channelNumber,
+                    total: danbiCsvData.length,
+                    lastUpdated: new Date().toISOString(),
+                    comments: `// ${channelNumber}번 완료 ${channelNumber + 1}번 시작`
+                };
+
+                setDanbiProgress(newProgress);
+
+                addLog(LogStatus.SUCCESS, `✅ [${channelNumber}] ${channel.channel_name} 완료`);
+
+            } catch (error) {
+                const errorProgress = {
+                    complete: i, // 현재 인덱스로 설정 (실패한 것은 완료로 치지 않음)
+                    total: danbiCsvData.length,
+                    lastUpdated: new Date().toISOString(),
+                    comments: `// ${channelNumber}번 진행중 오류: ${error.message}`
+                };
+
+                setDanbiProgress(errorProgress);
+                
+                // 업데이트된 progress JSON을 다운로드용으로 저장
+                setUpdatedCompleteJson(JSON.stringify(errorProgress, null, 2));
+
+                addLog(LogStatus.ERROR, `❌ [${channelNumber}] ${channel.channel_name} 실패: ${error.message}`);
+                addLog(LogStatus.INFO, `💾 업데이트된 danbi_complete.json 다운로드 가능`);
+                
+                // 오류 발생 시 중단
+                setIsDanbiBatchRunning(false);
+                return;
+            }
+
+            // API 호출 간격 조절 (1초)
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        // 모든 채널 처리 완료
+        const finalProgress = {
+            complete: danbiCsvData.length,
+            total: danbiCsvData.length,
+            lastUpdated: new Date().toISOString(),
+            comments: `// 모든 처리 완료 (${danbiCsvData.length}/${danbiCsvData.length})`
+        };
+        
+        setDanbiProgress(finalProgress);
+        setUpdatedCompleteJson(JSON.stringify(finalProgress, null, 2));
+        
+        addLog(LogStatus.SUCCESS, `🎉 단비 배치 처리 완료! 총 ${danbiCsvData.length}개 채널 처리됨`);
+        addLog(LogStatus.INFO, `💾 업데이트된 danbi_complete.json 다운로드 가능`);
+        setIsDanbiBatchRunning(false);
+    };
+
+    // danbi_complete.json 다운로드 함수
+    const downloadCompleteJson = () => {
+        if (!updatedCompleteJson) return;
+        
+        const blob = new Blob([updatedCompleteJson], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'danbi_complete.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        addLog(LogStatus.SUCCESS, '📥 danbi_complete.json 파일이 다운로드되었습니다.');
+    };
+
 
     const handleFieldChange = (fieldId: string, group: 'basic' | 'applied') => {
         const updater = group === 'basic' ? setSelectedFields : setAppliedFields;
@@ -867,6 +1133,21 @@ const App: React.FC = () => {
                     addLog(LogStatus.WARNING, '기존 채널이 없습니다. 신규 데이터 수집 모드로 전환해주세요.');
                     return;
                 }
+            } else if (updateMode === 'danbi_batch') {
+                // Danbi CSV 배치 처리 모드
+                if (danbiCsvData.length === 0) {
+                    addLog(LogStatus.ERROR, 'Danbi CSV 파일을 먼저 업로드해주세요.');
+                    return;
+                }
+                
+                // targetChannelIds에 이미 설정된 채널들 사용 (단비 CSV 채널 ID 확인 버튼에서 설정됨)
+                if (targetChannelIds.length === 0) {
+                    addLog(LogStatus.WARNING, '처리할 채널이 없습니다. "단비 CSV 채널 ID 확인" 버튼을 먼저 클릭해주세요.');
+                    return;
+                }
+                
+                processTargetChannelIds = [...targetChannelIds]; // targetChannelIds 사용
+                addLog(LogStatus.SUCCESS, `📂 Danbi CSV에서 ${processTargetChannelIds.length}개 채널을 처리합니다.`);
             } else {
                 // 활성화된 채널 수집 방법에 따라 분기
                 if (activeChannelMethod === 'search') {
@@ -925,9 +1206,9 @@ const App: React.FC = () => {
                 isActive: true
             });
 
-            // 2단계: 선택된 필드로 데이터 추출
-            addLog(LogStatus.PENDING, '채널 데이터 추출 중...');
-            const channelDataList = [];
+            // 2단계: 선택된 필드로 데이터 추출 (스트리밍 방식)
+            addLog(LogStatus.PENDING, '채널 데이터 추출 및 즉시 저장 중...');
+            let processedCount = 0;
 
             for (let i = 0; i < processTargetChannelIds.length; i++) {
                 const channelId = processTargetChannelIds[i];
@@ -1027,15 +1308,41 @@ const App: React.FC = () => {
                         }));
                     }
 
-                    channelDataList.push({
+                    // 즉시 Drive에 저장 (메모리 절약)
+                    const channelData = {
                         channelId,
                         staticData,
                         snapshot: finalSnapshotData
-                    });
+                    };
                     
                     setProcessingProgress(prev => ({
                         ...prev,
-                        currentStep: `데이터 추출 완료 (${i + 1}/${processTargetChannelIds.length})`
+                        currentStep: 'Google Drive에 저장 중...'
+                    }));
+                    
+                    addLog(LogStatus.PENDING, `채널 파일 저장 중... (${i + 1}/${processTargetChannelIds.length}): ${staticData?.title || channelId}`);
+                    
+                    await updateOrCreateChannelFile(channelData, selectedFolder.id);
+                    processedCount++;
+                    
+                    addLog(LogStatus.SUCCESS, `✓ ${staticData?.title || channelId} 저장 완료`);
+                    
+                    // Danbi 모드인 경우 진행상황 업데이트
+                    if (updateMode === 'danbi_batch' && isDanbiMode) {
+                        const currentChannelNumber = danbiStartIndex + i + 1;
+                        const updatedProgress = {
+                            complete: currentChannelNumber,
+                            total: danbiCsvData.length,
+                            lastUpdated: new Date().toISOString(),
+                            comments: `${currentChannelNumber}까지 완료되었음. ${currentChannelNumber + 1}부터 시작`
+                        };
+                        setDanbiProgress(updatedProgress);
+                        addLog(LogStatus.INFO, `📊 Danbi 진행상황 업데이트: ${currentChannelNumber}/${danbiCsvData.length} 완료`);
+                    }
+                    
+                    setProcessingProgress(prev => ({
+                        ...prev,
+                        currentStep: `저장 완료 (${i + 1}/${processTargetChannelIds.length})`
                     }));
                     addLog(LogStatus.SUCCESS, `채널 ${staticData.title || channelId} 데이터 추출 완료`);
                 } catch (error) {
@@ -1047,44 +1354,7 @@ const App: React.FC = () => {
                 }
             }
 
-            // 3단계: 채널별 파일 생성/업데이트 및 Google Drive 저장
-            setProcessingProgress(prev => ({
-                ...prev,
-                currentIndex: 0,
-                totalCount: channelDataList.length,
-                currentChannelName: '',
-                currentStep: 'Google Drive 저장 준비...'
-            }));
-            addLog(LogStatus.PENDING, '채널별 파일 생성/업데이트 중...');
-
-            // 각 채널을 개별 파일로 저장/업데이트 (간소화된 메타데이터 구조)
-            for (let i = 0; i < channelDataList.length; i++) {
-                const channelData = channelDataList[i];
-                
-                setProcessingProgress(prev => ({
-                    ...prev,
-                    currentIndex: i + 1,
-                    currentChannelName: channelData.staticData?.title || channelData.channelId,
-                    currentStep: 'Google Drive에 저장 중...'
-                }));
-                
-                addLog(LogStatus.PENDING, `채널 파일 처리 중... (${i + 1}/${channelDataList.length}): ${channelData.staticData?.title || channelData.channelId}`);
-                
-                try {
-                    await updateOrCreateChannelFile(channelData, selectedFolder.id);
-                    setProcessingProgress(prev => ({
-                        ...prev,
-                        currentStep: `저장 완료 (${i + 1}/${channelDataList.length})`
-                    }));
-                    addLog(LogStatus.SUCCESS, `✓ ${channelData.staticData?.title || channelData.channelId} 파일 처리 완료`);
-                } catch (error) {
-                    setProcessingProgress(prev => ({
-                        ...prev,
-                        currentStep: `저장 실패: ${error}`
-                    }));
-                    addLog(LogStatus.WARNING, `⚠ ${channelData.channelId} 파일 처리 실패: ${error}`);
-                }
-            }
+            // 스트리밍 방식으로 이미 모든 저장 완료됨
 
             // collections 폴더 생성 및 간소화된 수집 기록 생성
             let collectionsFolder = await findFileByName('collections', selectedFolder.id);
@@ -1097,42 +1367,62 @@ const App: React.FC = () => {
             const metadataFileName = `${timestamp}.json`;
             const metadataContent = {
                 timestamp: new Date().toISOString(),
-                totalChannels: channelDataList.length,
+                totalChannels: processedCount,
                 updateMode: updateMode,
-                channels: channelDataList.map(ch => ({
-                    channelId: ch.channelId,
-                    title: ch.staticData?.title || 'Unknown'
-                }))
+                processedChannels: processTargetChannelIds.slice(0, processedCount)
             };
 
             await createJsonFile(metadataFileName, collectionsFolder.id, metadataContent);
             addLog(LogStatus.SUCCESS, `📋 수집 기록 파일 생성: collections/${metadataFileName}`);
-            addLog(LogStatus.SUCCESS, `🎉 처리 완료: 총 ${channelDataList.length}개 채널을 ${updateMode === 'existing' ? '업데이트' : '신규 수집'}했습니다.`);
+            addLog(LogStatus.SUCCESS, `🎉 처리 완료: 총 ${processedCount}개 채널을 ${updateMode === 'existing' ? '업데이트' : '신규 수집'}했습니다.`);
             
             // 진행상황 완료 처리
             setProcessingProgress(prev => ({
                 ...prev,
-                currentStep: `✅ 모든 처리 완료! (${channelDataList.length}개 채널)`,
+                currentStep: `✅ 모든 처리 완료! (${processedCount}개 채널)`,
                 isActive: false
             }));
 
         } catch (error: any) {
             console.error('데이터 처리 오류:', error);
-            addLog(LogStatus.ERROR, `데이터 처리 실패: ${error.message}`);
+            
+            // 할당량 오류 감지 시 자동 다운로드
+            const isQuotaError = error.message && (
+                error.message.toLowerCase().includes('quota') ||
+                error.message.toLowerCase().includes('exceed') ||
+                error.message.toLowerCase().includes('limit')
+            );
+            
+            if (isQuotaError && updatedCompleteJson && updateMode === 'danbi_batch') {
+                const currentComplete = danbiProgress?.complete || 0;
+                addLog(LogStatus.WARNING, `🔥 할당량 한계 도달 - ${currentComplete}개 채널까지 처리됨`);
+                addLog(LogStatus.INFO, '📥 진행상황 자동 다운로드 중...');
+                try {
+                    downloadCompleteJson();
+                    addLog(LogStatus.SUCCESS, '✅ danbi_complete.json 자동 다운로드 완료!');
+                } catch (downloadError) {
+                    addLog(LogStatus.ERROR, `다운로드 실패: ${downloadError}`);
+                }
+            } else {
+                addLog(LogStatus.ERROR, `데이터 처리 실패: ${error.message}`);
+            }
+            
             setStep4Complete(false);
             setIsProcessingStarted(false);
             
             // 진행상황 오류 처리
             setProcessingProgress(prev => ({
                 ...prev,
-                currentStep: `❌ 처리 실패: ${error.message}`,
+                currentStep: isQuotaError ? 
+                    `⚡ 할당량 한계 도달 (${danbiProgress?.complete || 0}개 완료)` : 
+                    `❌ 처리 실패: ${error.message}`,
                 isActive: false
             }));
         }
     };
 
     const handleShowExample = () => {
-        // 실제 동작과 유사한 예시 데이터 생성
+        // 실제 동작과 유사한 예시 데이터 생성 (새로운 JSON 구조 적용)
         const sampleSnapshot: any = {};
         const sampleStaticData: any = {};
         const allFields = [...selectedFields, ...appliedFields];
@@ -1145,15 +1435,25 @@ const App: React.FC = () => {
             publishedAt: '2012-02-20T13:42:00Z'
         };
 
+        // 새로운 구조: 정적 데이터는 publishedAt만
+        sampleStaticData.publishedAt = mockStats.publishedAt;
+
         // 선택된 필드들의 실제 계산 결과 생성
         allFields.forEach(fieldId => {
             const allDataFields = [...apiDataFields.flatMap(g => g.fields), ...appliedDataFields.flatMap(g => g.fields)];
             const field = allDataFields.find(f => f.id === fieldId);
             if (field) {
-                // 정적 데이터와 스냅샷 데이터 분리
-                if (['title', 'description', 'customUrl', 'publishedAt', 'defaultLanguage', 'country', 'thumbnailUrl', 'thumbnailDefault', 'thumbnailMedium', 'thumbnailHigh'].includes(field.id)) {
-                    sampleStaticData[field.id] = field.example;
-                } else if (['subscriberCount', 'viewCount', 'videoCount', 'hiddenSubscriberCount'].includes(field.id)) {
+                // 새로운 구조: subscriberCount 제외하고 모든 데이터를 스냅샷에
+                if (field.id === 'subscriberCount') {
+                    // subscriberCount는 별도 히스토리로 관리되므로 스냅샷에서 제외
+                    return;
+                } else if (field.id === 'publishedAt') {
+                    // publishedAt은 정적 데이터에만 저장 (이미 위에서 처리됨)
+                    return;
+                } else if (['title', 'customUrl', 'thumbnailUrl', 'thumbnailDefault', 'thumbnailMedium', 'thumbnailHigh'].includes(field.id)) {
+                    // 채널 정보는 스냅샷에 (변경 가능하므로)
+                    sampleSnapshot[field.id] = field.example;
+                } else if (['viewCount', 'videoCount', 'hiddenSubscriberCount'].includes(field.id)) {
                     // 기본 통계는 문자열로 
                     sampleSnapshot[field.id] = (mockStats as any)[field.id] || field.example;
                 } else {
@@ -1175,31 +1475,38 @@ const App: React.FC = () => {
             }
         });
 
-        // 새로운 채널 파일 구조
+        // 구독자 히스토리 생성 (월별 5개 예시)
+        const subscriberHistory = [
+            { month: "2024-09", count: mockStats.subscriberCount },
+            { month: "2024-08", count: "285000000" },
+            { month: "2024-07", count: "280000000" },
+            { month: "2024-06", count: "275000000" },
+            { month: "2024-05", count: "270000000" }
+        ];
+
+        // 새로운 채널 파일 구조 적용
         const sampleChannelFile = {
             channelId: "UCX6OQ3DkcsbYNE6H8uQQuVA",
+            // 1. 정적 데이터 (채널 생성날짜만)
             staticData: sampleStaticData,
-            ...(Object.keys(fieldMapping).length > 0 && { fieldMapping }),
+            // 2. 스냅샷 (최신 1개만, subscriberCount 제외)
             snapshots: [
                 {
                     ts: new Date().toISOString(),
                     ...sampleSnapshot,
-                    collectionInfo: {
-                        exportId: `export-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`,
-                        filters: {
-                            maxSubscribers: parseInt(minSubscribers),
-                            sortOrder: sortOrder,
-                            category: selectedCategory || 'all'
-                        },
-                        selectedFields: Array.from(selectedFields)
-                    }
+                    // 기존 collectionInfo는 제거 (용량 최적화)
                 }
             ],
+            // 3. 구독자 히스토리 (월별 5개)
+            subscriberHistory: subscriberHistory,
+            // 4. 메타데이터
             metadata: {
                 firstCollected: new Date().toISOString(),
                 lastUpdated: new Date().toISOString(),
                 totalCollections: 1
-            }
+            },
+            // fieldMapping (응용 데이터 설명용)
+            ...(Object.keys(fieldMapping).length > 0 && { fieldMapping })
         };
 
         setExampleJson(JSON.stringify(sampleChannelFile, null, 2));
@@ -1293,17 +1600,23 @@ const App: React.FC = () => {
                 console.log(`✅ [9] subsGainedPerYear: ${newSnapshot.gspy}명/년`);
             }
             
-            // 10. viralIndex (gvir) - 복합 계산
+            // 10. subscriberToViewRatioPercent (gsvr) - 구독자-조회수 비율
+            if (appliedFields.has('subscriberToViewRatioPercent') && subscriberCount && viewCount && viewCount > 0) {
+                newSnapshot.gsvr = parseFloat(((subscriberCount / viewCount) * 100).toFixed(4));
+                console.log(`✅ [10] subscriberToViewRatioPercent: ${newSnapshot.gsvr}%`);
+            }
+            
+            // 11. viralIndex (gvir) - 복합 계산
             if (appliedFields.has('viralIndex') && subscriberCount && viewCount && videoCount && videoCount > 0) {
                 const conversionRatePercent = (subscriberCount / viewCount) * 100; // gsub와 동일
                 const avgViewsPerVideo = viewCount / videoCount;
                 newSnapshot.gvir = Math.round((conversionRatePercent * 100) + (avgViewsPerVideo / 1000000));
-                console.log(`✅ [10] viralIndex: ${newSnapshot.gvir}`);
+                console.log(`✅ [11] viralIndex: ${newSnapshot.gvir}`);
             }
             
             // ====== 콘텐츠 분석 ======
             
-            // 11. shortsCount (csct) - shortsCountData 필요
+            // 12. shortsCount (csct) - shortsCountData 필요
             if (appliedFields.has('shortsCount') && shortsCountData) {
                 newSnapshot.csct = shortsCountData.shortsCount;
                 console.log(`✅ [11] shortsCount: ${newSnapshot.csct}개`);
@@ -1357,6 +1670,65 @@ const App: React.FC = () => {
         console.log('📊 최종 결과:', newSnapshot);
         return newSnapshot;
     };
+
+    // Danbi CSV 배치 처리 함수 - 단순하게 하나씩 순차적으로
+    const handleDanbiBatchProcess = useCallback(async () => {
+        if (isDanbiBatchRunning || danbiCsvData.length === 0) return;
+        
+        setIsDanbiBatchRunning(true);
+        addLog(LogStatus.INFO, `=== Danbi 배치 처리 시작 === (총 ${danbiProgress.total}개, ${danbiProgress.complete}번부터 시작)`);
+        
+        // danbiProgress.complete + 1번부터 시작
+        const startIndex = danbiProgress.complete;
+        
+        for (let i = startIndex; i < danbiCsvData.length; i++) {
+            if (!isDanbiBatchRunning) break; // 중단된 경우
+            
+            const currentChannel = danbiCsvData[i];
+            const channelNumber = i + 1; // 1부터 시작
+            
+            try {
+                addLog(LogStatus.INFO, `[${channelNumber}/${danbiCsvData.length}] 처리 중: ${currentChannel.channel_name}`);
+                
+                // 채널 URL에서 채널 ID 추출
+                const urlParts = currentChannel.profile_url.split('/');
+                const channelId = urlParts[urlParts.length - 1];
+                
+                // 기존 채널 데이터 수집 로직 사용
+                const channelData = await fetchSelectedChannelData(channelId, youtubeApiKey, selectedFields);
+                
+                if (channelData) {
+                    // Google Drive에 저장
+                    await updateOrCreateChannelFile(channelData, selectedFolder?.id || 'root');
+                    addLog(LogStatus.SUCCESS, `✅ [${channelNumber}] ${currentChannel.channel_name} 완료`);
+                } else {
+                    addLog(LogStatus.WARNING, `⚠️ [${channelNumber}] ${currentChannel.channel_name} 데이터 없음`);
+                }
+                
+            } catch (error: any) {
+                addLog(LogStatus.ERROR, `❌ [${channelNumber}] ${currentChannel.channel_name} 실패: ${error.message}`);
+            }
+            
+            // 진행상황 업데이트 (하나 완료될 때마다 즉시 저장)
+            const updatedProgress = {
+                complete: channelNumber,
+                total: danbiCsvData.length,
+                lastUpdated: new Date().toISOString(),
+                comments: `${channelNumber}도중 중단 혹은 ${channelNumber}까지 완료되었음. ${channelNumber + 1}부터 시작`
+            };
+            
+            setDanbiProgress(updatedProgress);
+            
+            // danbi_complete.json 파일 업데이트 (실제 파일 시스템에는 저장되지 않음 - 브라우저 제한)
+            console.log('진행상황 업데이트:', updatedProgress);
+            
+            // 1초 대기 (API 호출 간격 조절)
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        setIsDanbiBatchRunning(false);
+        addLog(LogStatus.SUCCESS, `🎉 Danbi 배치 처리 완료! (${danbiProgress.complete}/${danbiProgress.total})`);
+    }, [isDanbiBatchRunning, danbiCsvData, danbiProgress, youtubeApiKey, selectedFields, appliedFields, selectedFolder, addLog]);
 
     const handleStartProcess = useCallback(async () => {
         if (isProcessing) return;
@@ -1851,7 +2223,9 @@ const App: React.FC = () => {
                         isComplete={step3Complete && activeChannelMethod === 'manual'}
                     >
                     <div className="space-y-4">
+                        {/* @핸들 직접 입력 */}
                         <div className="flex flex-col gap-2">
+                            <label className="text-sm font-medium text-slate-300">@핸들 직접 입력</label>
                             <input
                                 type="text"
                                 value={manualChannelHandle}
@@ -1875,14 +2249,105 @@ const App: React.FC = () => {
                                 ) : '수동 추가'}
                             </button>
                         </div>
-                        <div className="bg-slate-900/50 p-2 rounded-md border border-slate-700">
-                            {targetChannelIds.length > 0 ? (
-                                targetChannelIds.map(id => (
-                                    <div key={id} className="flex items-center justify-between p-2 hover:bg-slate-700/50 rounded">
-                                        <span className="font-mono text-base text-slate-300">{id}</span>
-                                        <button onClick={() => handleRemoveChannel(id)} className="text-red-400 hover:text-red-300 text-base font-bold h-[50px] flex items-center justify-center">제거</button>
+
+                        {/* 구분선 */}
+                        <div className="flex items-center gap-4">
+                            <div className="flex-1 h-px bg-slate-600"></div>
+                            <span className="text-slate-400 text-sm">또는</span>
+                            <div className="flex-1 h-px bg-slate-600"></div>
+                        </div>
+
+                        {/* CSV 파일 업로드 (단비 배치) */}
+                        <div className="flex flex-col gap-3">
+                            <label className="text-sm font-medium text-slate-300">📂 단비 배치 처리</label>
+                            
+                            {/* CSV 파일 업로드 */}
+                            <div>
+                                <label className="text-xs text-slate-400 mb-1 block">1. danbi_channels.csv 파일</label>
+                                <input
+                                    type="file"
+                                    accept=".csv"
+                                    onChange={handleCsvUpload}
+                                    className="block w-full text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 bg-slate-700 border border-slate-600 rounded-lg"
+                                />
+                                {csvFile && (
+                                    <div className="text-xs text-green-400 mt-1">
+                                        ✅ {csvFile.name} - {danbiCsvData.length}개 채널
                                     </div>
-                                ))
+                                )}
+                            </div>
+
+                            {/* 진행상황 JSON 파일 업로드 */}
+                            <div>
+                                <label className="text-xs text-slate-400 mb-1 block">2. danbi_complete.json 파일</label>
+                                <input
+                                    type="file"
+                                    accept=".json"
+                                    onChange={handleCompleteJsonUpload}
+                                    className="block w-full text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-green-600 file:text-white hover:file:bg-green-700 bg-slate-700 border border-slate-600 rounded-lg"
+                                />
+                                {completeJsonFile && (
+                                    <div className="text-xs text-green-400 mt-1">
+                                        ✅ {completeJsonFile.name} - {danbiProgress.complete}/{danbiProgress.total} 완료
+                                        <div className="text-xs text-slate-400">{danbiProgress.comments}</div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 배치 처리 시작 버튼 */}
+                            <button
+                                onClick={handleDanbiCsvCheck}
+                                disabled={!csvFile || !completeJsonFile || isDanbiAnalyzing}
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 rounded-lg transition-colors text-lg h-[50px] flex items-center justify-center disabled:bg-slate-500 disabled:cursor-not-allowed"
+                            >
+                                {isDanbiAnalyzing ? (
+                                    <>
+                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                                        분석 중...
+                                    </>
+                                ) : (
+                                    <>🔍 단비 CSV 채널 ID 확인</>
+                                )}
+                            </button>
+
+                            {/* 진행률 표시 */}
+                            {isDanbiBatchRunning && (
+                                <div className="text-sm text-blue-400 bg-blue-900/20 p-2 rounded">
+                                    📊 진행률: {Math.round((danbiProgress.complete / danbiProgress.total) * 100)}% 
+                                    ({danbiProgress.complete}/{danbiProgress.total})
+                                </div>
+                            )}
+
+                            {/* 다운로드 버튼 */}
+                            {updatedCompleteJson && (
+                                <button
+                                    onClick={downloadCompleteJson}
+                                    className="bg-green-600 hover:bg-green-700 text-white font-bold px-4 rounded-lg transition-colors text-sm h-[40px] flex items-center justify-center"
+                                >
+                                    📥 업데이트된 danbi_complete.json 다운로드
+                                </button>
+                            )}
+                        </div>
+                        <div className="bg-slate-900/50 p-2 rounded-md border border-slate-700">
+                            {isDanbiAnalyzing ? (
+                                <div className="flex items-center justify-center py-8">
+                                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400 mr-3"></div>
+                                    <span className="text-slate-400">채널 목록 분석 중...</span>
+                                </div>
+                            ) : targetChannelIds.length > 0 ? (
+                                <>
+                                    {targetChannelIds.slice(0, 50).map(id => (
+                                        <div key={id} className="flex items-center justify-between p-2 hover:bg-slate-700/50 rounded">
+                                            <span className="font-mono text-base text-slate-300">{id}</span>
+                                            <button onClick={() => handleRemoveChannel(id)} className="text-red-400 hover:text-red-300 text-base font-bold h-[50px] flex items-center justify-center">제거</button>
+                                        </div>
+                                    ))}
+                                    {targetChannelIds.length > 50 && (
+                                        <div className="p-2 text-center text-slate-400 border-t border-slate-600 mt-2 pt-2">
+                                            ... 그 외 {targetChannelIds.length - 50}개 채널 (상위 50개만 표시)
+                                        </div>
+                                    )}
+                                </>
                             ) : (
                                 <p className="text-slate-500 text-center text-base py-4">처리할 채널이 없습니다.</p>
                             )}
@@ -1892,6 +2357,7 @@ const App: React.FC = () => {
                 </Step>
                 </div>
                 </div>
+
 
                 {/* Step 4: Select Data Fields */}
                  <Step
@@ -1913,14 +2379,14 @@ const App: React.FC = () => {
                                     <button
                                         onClick={() => {
                                             const preset1Fields = new Set([
-                                                'title', 'publishedAt', 'country', 'customUrl', 'thumbnailDefault',
+                                                'title', 'publishedAt', 'country', 'customUrl', 'channelUrl', 'thumbnailDefault',
                                                 'subscriberCount', 'videoCount', 'viewCount', 'topicCategories', 'uploadsPlaylistId'
                                             ]);
                                             setSelectedFields(preset1Fields);
                                         }}
                                         className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-md transition-colors font-medium"
                                     >
-                                        옵션값 1 (10개 필드)
+                                        옵션값 1 (11개 필드)
                                     </button>
                                     <button
                                         onClick={() => setSelectedFields(new Set())}
@@ -1930,7 +2396,7 @@ const App: React.FC = () => {
                                     </button>
                                 </div>
                                 <div className="text-xs text-slate-400 mt-1">
-                                    옵션값 1: 채널제목, 개설일, 국가, 지정URL, 프로필아이콘88×88, 구독자수, 총영상수, 총조회수, 토픽카테고리, 업로드플레이리스트ID
+                                    옵션값 1: 채널제목, 개설일, 국가, 지정URL, 채널URL, 프로필아이콘88×88, 구독자수, 총영상수, 총조회수, 토픽카테고리, 업로드플레이리스트ID
                                 </div>
                             </div>
                             

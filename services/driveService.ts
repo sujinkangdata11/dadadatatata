@@ -3,6 +3,29 @@ import { DriveFile } from '../types';
 const API_BASE_URL = 'https://www.googleapis.com/drive/v3';
 const API_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3';
 
+// 구독자 히스토리 관리 함수 (월별 최대 5개 유지)
+const updateSubscriberHistory = (existingHistory: any[] = [], newSubscriberCount: string): any[] => {
+    const currentMonth = new Date().toISOString().slice(0, 7); // "2024-09" 형태
+    
+    // 기존 히스토리에서 현재 월 데이터가 있는지 확인
+    const existingIndex = existingHistory.findIndex(item => item.month === currentMonth);
+    
+    if (existingIndex >= 0) {
+        // 같은 달이면 덮어쓰기
+        existingHistory[existingIndex].count = newSubscriberCount;
+        return existingHistory;
+    } else {
+        // 새로운 달이면 맨 앞에 추가
+        const newHistory = [
+            { month: currentMonth, count: newSubscriberCount },
+            ...existingHistory
+        ];
+        
+        // 최대 5개까지만 유지 (오래된 것 삭제)
+        return newHistory.slice(0, 5);
+    }
+};
+
 // FIX: Removed 'declare global' block for 'gapi' which was causing a "Cannot redeclare block-scoped variable" error.
 // The type is now defined globally in `types.ts`.
 const getAuthToken = (): string => {
@@ -122,44 +145,67 @@ export const updateOrCreateChannelFile = async (
         // 기존 채널 파일이 있는지 확인
         const existingFile = await findFileByName(fileName, channelsFolder.id);
         
-        const newSnapshot = {
-            timestamp: new Date().toISOString(),
-            ...channelData.snapshot
-        };
-
-        let totalSnapshots = 1;
         const now = new Date().toISOString();
 
+        // 새로운 스냅샷 생성 (staticData + snapshotData 합침, subscriberCount 제외)
+        const { subscriberCount, ...snapshotWithoutSubscriber } = channelData.snapshot;
+        const { publishedAt, ...staticDataForSnapshot } = channelData.staticData || {};
+        
+        const newSnapshot = {
+            ts: now,
+            // staticData의 필드들 (채널 정보, 이미지 등)
+            ...staticDataForSnapshot,
+            // snapshotData의 필드들 (수치 데이터, 응용데이터 등)
+            ...snapshotWithoutSubscriber
+        };
+
         if (existingFile) {
-            // 기존 파일 업데이트 - 스냅샷 추가 + Static 데이터 덮어쓰기
+            // 기존 파일 업데이트
             const existingContent = await getFileContent(existingFile.id);
             const existingData = JSON.parse(existingContent);
             
-            // 🔄 Static 데이터는 항상 최신으로 덮어쓰기 (채널명, 프로필 등이 바뀔 수 있음)
-            existingData.staticData = channelData.staticData; // 완전 덮어쓰기
+            // 1. 정적 데이터 (채널 생성날짜만 유지)
+            const updatedStaticData = {
+                publishedAt: channelData.staticData?.publishedAt || existingData.staticData?.publishedAt
+            };
             
-            // 📈 스냅샷은 시간별로 누적 (증가 추이 분석용)
-            existingData.snapshots = existingData.snapshots || [];
-            existingData.snapshots.push(newSnapshot);
-            totalSnapshots = existingData.snapshots.length;
+            // 2. 스냅샷 데이터 (최신 1개로 덮어쓰기)
+            const updatedSnapshots = [newSnapshot];
             
-            // 메타데이터 업데이트 (간소화된 3개 필드만)
-            existingData.metadata = {
-                firstCollected: existingData.metadata?.firstCollected || newSnapshot.timestamp,
-                lastUpdated: newSnapshot.timestamp,
-                totalCollections: totalSnapshots
+            // 3. 구독자 히스토리 (월별 5개 관리)
+            const updatedSubscriberHistory = updateSubscriberHistory(
+                existingData.subscriberHistory || [], 
+                subscriberCount
+            );
+            
+            // 4. 메타데이터 업데이트
+            const updatedMetadata = {
+                firstCollected: existingData.metadata?.firstCollected || now,
+                lastUpdated: now,
+                totalCollections: (existingData.metadata?.totalCollections || 0) + 1
             };
 
-            await updateJsonFile(existingFile.id, existingData);
+            const updatedChannelData = {
+                channelId: channelData.channelId,
+                staticData: updatedStaticData,
+                snapshots: updatedSnapshots,
+                subscriberHistory: updatedSubscriberHistory,
+                metadata: updatedMetadata
+            };
+
+            await updateJsonFile(existingFile.id, updatedChannelData);
         } else {
-            // 새 파일 생성 (간소화된 메타데이터)
+            // 새 파일 생성
             const newChannelData = {
                 channelId: channelData.channelId,
-                staticData: channelData.staticData,
+                staticData: {
+                    publishedAt: channelData.staticData?.publishedAt
+                },
                 snapshots: [newSnapshot],
+                subscriberHistory: updateSubscriberHistory([], subscriberCount),
                 metadata: {
-                    firstCollected: newSnapshot.timestamp,
-                    lastUpdated: newSnapshot.timestamp,
+                    firstCollected: now,
+                    lastUpdated: now,
                     totalCollections: 1
                 }
             };
@@ -173,10 +219,19 @@ export const updateOrCreateChannelFile = async (
             title: channelData.staticData?.title || 'Unknown',
             firstCollected: existingFile ? undefined : now, // 새 채널일때만 설정
             lastUpdated: now,
-            totalSnapshots
+            totalSnapshots: existingFile ? 
+                (JSON.parse(await getFileContent(existingFile.id)).metadata?.totalCollections || 1) : 1
         };
 
-        await updateChannelIndex(folderId, channelInfo);
+        try {
+            // IMPORTANT: 채널 인덱스는 항상 루트('root')에 저장
+            // 개별 채널 파일은 사용자 선택 폴더에, 인덱스는 루트에 분리 저장
+            // 문제 발생시 이 부분을 'root' 대신 folderId로 변경 가능
+            await updateChannelIndex('root', channelInfo);
+        } catch (indexError) {
+            console.warn(`채널 인덱스 업데이트 실패 (채널 저장은 성공): ${indexError}`);
+            // 인덱스 업데이트 실패해도 채널 저장은 성공한 것으로 처리
+        }
 
     } catch (error: any) {
         console.error(`채널 ${channelData.channelId} 파일 처리 오류:`, error);
@@ -212,10 +267,17 @@ export const getOrCreateChannelIndex = async (folderId: string): Promise<any> =>
 export const updateChannelIndex = async (folderId: string, channelInfo: any): Promise<void> => {
     try {
         const indexFileName = '_channel_index.json';
-        const existingIndexFile = await findFileByName(indexFileName, folderId);
+        let existingIndexFile = await findFileByName(indexFileName, folderId);
         
         if (!existingIndexFile) {
-            throw new Error('채널 인덱스 파일을 찾을 수 없습니다.');
+            // 인덱스 파일이 없으면 자동 생성
+            console.log(`인덱스 파일이 없어서 새로 생성합니다: ${folderId}/${indexFileName}`);
+            await getOrCreateChannelIndex(folderId);
+            // 생성 후 다시 찾기
+            existingIndexFile = await findFileByName(indexFileName, folderId);
+            if (!existingIndexFile) {
+                throw new Error('인덱스 파일 생성 후에도 찾을 수 없습니다.');
+            }
         }
         
         const currentIndex = JSON.parse(await getFileContent(existingIndexFile.id));
