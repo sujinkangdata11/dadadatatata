@@ -3,35 +3,76 @@
 
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 
-// Google Drive에서 폴더 내 파일 목록 조회
+// Google Drive에서 폴더 내 모든 파일 목록 조회 (pagination 지원)
 async function getDriveFiles(folderId, accessToken) {
-  const response = await fetch(`${DRIVE_API_BASE}/files?q=parents='${folderId}' and trashed=false&fields=files(id,name)`, {
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json'
+  let allFiles = [];
+  let nextPageToken = null;
+  
+  do {
+    const params = new URLSearchParams({
+      q: `parents='${folderId}' and trashed=false`,
+      fields: 'files(id,name),nextPageToken',
+      pageSize: '1000' // 최대 1000개씩
+    });
+    
+    if (nextPageToken) {
+      params.append('pageToken', nextPageToken);
     }
-  });
+    
+    const response = await fetch(`${DRIVE_API_BASE}/files?${params}`, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Drive API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    allFiles.push(...(data.files || []));
+    nextPageToken = data.nextPageToken;
+    
+    if (nextPageToken) {
+      console.log(`📄 페이지 완료, 현재 ${allFiles.length}개 파일 발견...`);
+    }
+    
+  } while (nextPageToken);
   
-  if (!response.ok) {
-    throw new Error(`Drive API error: ${response.status}`);
-  }
-  
-  return response.json();
+  return { files: allFiles };
 }
 
-// Google Drive에서 파일 내용 읽기
-async function getDriveFileContent(fileId, accessToken) {
-  const response = await fetch(`${DRIVE_API_BASE}/files/${fileId}?alt=media`, {
-    headers: {
-      'Authorization': `Bearer ${accessToken}`
+// Google Drive에서 파일 내용 읽기 (재시도 + 타임아웃 지원)
+async function getDriveFileContent(fileId, accessToken, maxRetries = 2) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30초 타임아웃
+      
+      const response = await fetch(`${DRIVE_API_BASE}/files/${fileId}?alt=media`, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        },
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`Drive file read error: ${response.status}`);
+      }
+      
+      return await response.text();
+      
+    } catch (error) {
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      console.log(`⚠️ 파일 읽기 재시도 ${attempt}/${maxRetries}: ${error.message}`);
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // 백오프
     }
-  });
-  
-  if (!response.ok) {
-    throw new Error(`Drive file read error: ${response.status}`);
   }
-  
-  return response.text();
 }
 
 async function syncDataToKV() {
@@ -54,8 +95,8 @@ async function syncDataToKV() {
     const allChannels = [];
     let processedCount = 0;
     
-    // 모든 파일 처리 (최대 1000개)
-    const filesToProcess = jsonFiles.slice(0, 1000);
+    // 모든 JSON 파일 처리
+    const filesToProcess = jsonFiles;
     
     for (const file of filesToProcess) {
       try {
