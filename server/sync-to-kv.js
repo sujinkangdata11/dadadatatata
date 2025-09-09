@@ -103,34 +103,9 @@ async function syncDataToKV() {
         const content = await getDriveFileContent(file.id, accessToken);
         const channelData = JSON.parse(content);
         
-        // 최신 스냅샷 데이터 추출
-        const latestSnapshot = channelData.snapshots?.[channelData.snapshots.length - 1];
-        if (latestSnapshot) {
-          // 모든 데이터를 포함하는 완전한 채널 객체
-          allChannels.push({
-            // 기본 정보
-            channelId: channelData.channelId,
-            
-            // Static Data (모든 필드 포함)
-            staticData: channelData.staticData || {},
-            
-            // 최신 스냅샷 (모든 지표 포함) 
-            latestSnapshot: latestSnapshot,
-            
-            // 메타데이터
-            metadata: channelData.metadata || {},
-            
-            // 편의를 위한 주요 필드들 (호환성)
-            title: channelData.staticData?.title || 'Unknown',
-            subscriberCount: parseInt(latestSnapshot.subscriberCount) || 0,
-            viewCount: parseInt(latestSnapshot.viewCount) || 0,
-            videoCount: parseInt(latestSnapshot.videoCount) || 0,
-            lastUpdated: latestSnapshot.timestamp || channelData.metadata?.lastUpdated,
-            avgViews: latestSnapshot.gavg || 0,
-            viralIndex: latestSnapshot.gvir || 0,
-            subscriberPerDay: latestSnapshot.gspd || 0,
-            publishedAt: channelData.staticData?.publishedAt
-          });
+        // 원본 JSON 데이터 그대로 저장 (변형 없이)
+        if (channelData.channelId) {
+          allChannels.push(channelData);
         }
         
         processedCount++;
@@ -142,11 +117,10 @@ async function syncDataToKV() {
       }
     }
 
-    // 구독자 수로 정렬
-    allChannels.sort((a, b) => b.subscriberCount - a.subscriberCount);
+    // 원본 순서 그대로 유지 (정렬하지 않음)
     
     console.log(`✅ 총 ${allChannels.length}개 채널 데이터 처리 완료`);
-    console.log(`📊 상위 채널: ${allChannels[0]?.title} (${allChannels[0]?.subscriberCount.toLocaleString()}명)`);
+    console.log(`📊 처리된 채널: ${allChannels.length}개 (원본 JSON 구조 유지)`);
     
     // KV에 저장할 데이터 준비
     const kvData = {

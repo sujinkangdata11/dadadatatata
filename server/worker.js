@@ -183,18 +183,23 @@ export default {
         }
 
         // URL 파라미터로 필터링 (선택사항)
-        const limit = parseInt(url.searchParams.get('limit')) || 100;
+        const limit = parseInt(url.searchParams.get('limit')) || 300000;
         const minSubs = parseInt(url.searchParams.get('minSubs')) || 0;
         const maxSubs = parseInt(url.searchParams.get('maxSubs')) || Infinity;
         
-        // 필터링 적용
-        let filteredChannels = channelData.channels.filter(channel => 
-          channel.subscriberCount >= minSubs && 
-          channel.subscriberCount <= maxSubs
-        );
+        // 순수 원본 JSON 그대로 반환 (프론트엔드 요구사항)
+        const originalChannels = channelData.channels || [];
         
-        // 제한 적용
-        filteredChannels = filteredChannels.slice(0, limit);
+        // 필터링을 위한 임시 데이터 추출 (원본 데이터는 변경하지 않음)
+        const filteredChannels = originalChannels.filter(channel => {
+          const latestSnapshot = channel.snapshots?.[channel.snapshots.length - 1];
+          const latestSubscriber = channel.subscriberHistory?.[channel.subscriberHistory.length - 1];
+          
+          if (!latestSnapshot) return false;
+          
+          const subscriberCount = parseInt(latestSubscriber?.count || '0');
+          return subscriberCount >= minSubs && subscriberCount <= maxSubs;
+        }).slice(0, limit);
         
         return new Response(JSON.stringify({
           message: 'Channel data from KV Storage (super fast!)',
