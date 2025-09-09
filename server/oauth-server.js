@@ -200,6 +200,7 @@ app.get('/auth/callback', async (req, res) => {
 });
 
 let syncStatus = '⏳ 시작 중...';
+let totalChannels = 0;
 
 // 동기화 실행
 function runSync() {
@@ -210,8 +211,15 @@ function runSync() {
   });
 
   syncProcess.stdout.on('data', (data) => {
-    syncStatus = data.toString().trim();
+    const output = data.toString().trim();
+    syncStatus = output;
     console.log('Sync:', syncStatus);
+    
+    // 채널 개수 추출
+    const channelMatch = output.match(/총 (\d+)개 채널 데이터 처리 완료/);
+    if (channelMatch) {
+      totalChannels = parseInt(channelMatch[1]);
+    }
   });
 
   syncProcess.stderr.on('data', (data) => {
@@ -247,7 +255,7 @@ function runSync() {
 
       kvProcess.on('close', (kvCode) => {
         if (kvCode === 0) {
-          syncStatus = '🎉 동기화 완료!<br>📊 <a href="https://vidhunt-api.evvi-aa-aa.workers.dev/api/channels?limit=3" target="_blank">API에서 데이터 확인하기</a><br>✅ 총 13개 채널 데이터가 전 세계 엣지에서 빠르게 제공됩니다!';
+          syncStatus = `🎉 동기화 완료!<br>📊 <a href="https://vidhunt-api.evvi-aa-aa.workers.dev/api/channels?limit=${totalChannels}" target="_blank">API에서 데이터 확인하기</a><br>✅ 총 ${totalChannels.toLocaleString()}개 채널 데이터가 전 세계 엣지에서 빠르게 제공됩니다!`;
           console.log('✅ KV 업로드 성공!');
         } else {
           syncStatus = `❌ KV 업로드 실패 (코드: ${kvCode})`;
