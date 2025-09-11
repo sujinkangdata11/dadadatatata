@@ -80,10 +80,14 @@ export const createJsonFile = async (fileName: string, folderId: string, content
         // 메모리에 저장
         localFileStorage.set(fileName, content);
         
-        // 브라우저에서 자동 다운로드
-        downloadJsonFile(fileName, content);
-        
-        console.log(`✅ [createJsonFile] 성공: ${fileName} (다운로드됨)`);
+        // 채널 인덱스 파일은 다운로드하지 않음
+        if (!fileName.includes('_channel_index.json')) {
+            // 브라우저에서 자동 다운로드 (채널 데이터만)
+            downloadJsonFile(fileName, content);
+            console.log(`✅ [createJsonFile] 성공: ${fileName} (다운로드됨)`);
+        } else {
+            console.log(`✅ [createJsonFile] 성공: ${fileName} (인덱스 파일이므로 메모리에만 저장)`);
+        }
         
         return {
             id: fileName,
@@ -92,8 +96,8 @@ export const createJsonFile = async (fileName: string, folderId: string, content
             mimeType: 'application/json'
         };
     } catch (error: any) {
-        console.error(`❌ [createJsonFile] 다운로드 실패: ${fileName}`, error);
-        throw new Error(`Failed to download file: ${error.message}`);
+        console.error(`❌ [createJsonFile] 처리 실패: ${fileName}`, error);
+        throw new Error(`Failed to process file: ${error.message}`);
     }
 }
 
@@ -102,8 +106,11 @@ export const updateJsonFile = async (fileId: string, content: object): Promise<D
         // 메모리에 업데이트
         localFileStorage.set(fileId, content);
         
-        // 브라우저에서 자동 다운로드 (업데이트된 파일)
-        downloadJsonFile(fileId, content);
+        // 채널 인덱스 파일은 다운로드하지 않음
+        if (!fileId.includes('_channel_index.json')) {
+            // 브라우저에서 자동 다운로드 (채널 데이터만)
+            downloadJsonFile(fileId, content);
+        }
         
         return {
             id: fileId,
