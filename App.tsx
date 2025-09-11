@@ -294,7 +294,7 @@ const App: React.FC = () => {
     const [isDanbiBatchRunning, setIsDanbiBatchRunning] = useState(false);
     const [danbiCsvData, setDanbiCsvData] = useState<any[]>([]);
     const [csvFile, setCsvFile] = useState<File | null>(null);
-    const [completeJsonFile, setCompleteJsonFile] = useState<File | null>(null);
+    const [lastChannelId, setLastChannelId] = useState<string>('');
     const [isProcessingCsv, setIsProcessingCsv] = useState(false);
     const [updatedCompleteJson, setUpdatedCompleteJson] = useState<string | null>(null);
     const [isDanbiMode, setIsDanbiMode] = useState(false);
@@ -778,23 +778,55 @@ const App: React.FC = () => {
         }
     };
 
-    // danbi_complete.json 파일 처리 함수
-    const handleCompleteJsonUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
+    // 채널 ID로 CSV에서 위치 찾기 함수
+    const handleFindChannelPosition = async () => {
+        if (!lastChannelId.trim()) {
+            addLog(LogStatus.ERROR, '채널 ID를 입력해주세요.');
+            return;
+        }
 
-        setCompleteJsonFile(file);
-        
+        if (danbiCsvData.length === 0) {
+            addLog(LogStatus.ERROR, 'CSV 파일을 먼저 업로드해주세요.');
+            return;
+        }
+
+        setIsProcessingCsv(true);
+        addLog(LogStatus.PENDING, `🔍 채널 ID "${lastChannelId}"를 CSV에서 검색 중...`);
+
         try {
-            const text = await file.text();
-            const progressData = JSON.parse(text);
-            setDanbiProgress(progressData);
-            
-            addLog(LogStatus.SUCCESS, `📋 진행상황 파일 로드 완료: ${progressData.complete}/${progressData.total} (${file.name})`);
-            addLog(LogStatus.INFO, `💭 ${progressData.comments}`);
+            // CSV 데이터에서 채널 ID 찾기
+            const channelIndex = danbiCsvData.findIndex(channel => 
+                channel.channelId === lastChannelId || 
+                channel.profile_url.includes(lastChannelId)
+            );
 
+            if (channelIndex === -1) {
+                addLog(LogStatus.ERROR, `❌ 채널 ID "${lastChannelId}"를 CSV에서 찾을 수 없습니다.`);
+                return;
+            }
+
+            const channelPosition = channelIndex + 1; // 1부터 시작
+            const nextPosition = channelPosition + 1;
+
+            // 진행상황 업데이트
+            const updatedProgress = {
+                complete: channelPosition,
+                total: danbiCsvData.length,
+                lastUpdated: new Date().toISOString(),
+                comments: `${channelPosition}번째까지 완료. ${nextPosition}번째부터 시작`
+            };
+
+            setDanbiProgress(updatedProgress);
+            setDanbiStartIndex(channelIndex + 1); // 다음 채널부터 시작
+
+            addLog(LogStatus.SUCCESS, `✅ 채널 "${danbiCsvData[channelIndex].channel_name}" 발견!`);
+            addLog(LogStatus.SUCCESS, `📍 위치: ${channelPosition}번째`);
+            addLog(LogStatus.INFO, `▶️ ${nextPosition}번째부터 시작하겠습니다.`);
+            
         } catch (error) {
-            addLog(LogStatus.ERROR, `진행상황 파일 처리 오류: ${error.message}`);
+            addLog(LogStatus.ERROR, `검색 중 오류 발생: ${error}`);
+        } finally {
+            setIsProcessingCsv(false);
         }
     };
 
@@ -805,10 +837,7 @@ const App: React.FC = () => {
             return;
         }
 
-        if (!completeJsonFile) {
-            addLog(LogStatus.ERROR, 'danbi_complete.json 파일을 먼저 업로드해주세요.');
-            return;
-        }
+        // JSON 파일 체크 제거됨 - 채널 ID 방식으로 변경
         
         // 로딩 시작
         setIsDanbiAnalyzing(true);
@@ -2150,18 +2179,28 @@ const App: React.FC = () => {
                                 )}
                             </div>
 
-                            {/* 진행상황 JSON 파일 업로드 */}
+                            {/* 마지막 채널 ID 입력 */}
                             <div>
-                                <label className="text-xs text-slate-400 mb-1 block">2. danbi_complete.json 파일</label>
-                                <input
-                                    type="file"
-                                    accept=".json"
-                                    onChange={handleCompleteJsonUpload}
-                                    className="block w-full text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-green-600 file:text-white hover:file:bg-green-700 bg-slate-700 border border-slate-600 rounded-lg"
-                                />
-                                {completeJsonFile && (
+                                <label className="text-xs text-slate-400 mb-1 block">2. 마지막 크롤링한 채널 ID</label>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        value={lastChannelId}
+                                        onChange={(e) => setLastChannelId(e.target.value)}
+                                        placeholder="예: UCxxxxxxxxxxxxxxxxxxxxxx"
+                                        className="flex-1 bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                    />
+                                    <button
+                                        onClick={handleFindChannelPosition}
+                                        disabled={isProcessingCsv || !lastChannelId.trim() || danbiCsvData.length === 0}
+                                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-md transition-colors text-sm"
+                                    >
+                                        확인
+                                    </button>
+                                </div>
+                                {danbiProgress.complete > 0 && (
                                     <div className="text-xs text-green-400 mt-1">
-                                        ✅ {completeJsonFile.name} - {danbiProgress.complete}/{danbiProgress.total} 완료
+                                        ✅ {danbiProgress.complete}번째까지 완료 - {danbiProgress.complete + 1}번째부터 시작
                                         <div className="text-xs text-slate-400">{danbiProgress.comments}</div>
                                     </div>
                                 )}
@@ -2170,7 +2209,7 @@ const App: React.FC = () => {
                             {/* 배치 처리 시작 버튼 */}
                             <button
                                 onClick={handleDanbiCsvCheck}
-                                disabled={!csvFile || !completeJsonFile || isDanbiAnalyzing}
+                                disabled={!csvFile || danbiProgress.complete === 0 || isDanbiAnalyzing}
                                 className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 rounded-lg transition-colors text-lg h-[50px] flex items-center justify-center disabled:bg-slate-500 disabled:cursor-not-allowed"
                             >
                                 {isDanbiAnalyzing ? (
