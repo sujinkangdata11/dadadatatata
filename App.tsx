@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 import { ChannelData, DriveFile, LogEntry, LogStatus, Snapshot } from './types';
 import { fetchSelectedChannelData, findChannelsImproved, fetchShortsCount, fetchChannelIdByHandle } from './services/youtubeService';
-import { findFileByName, getFileContent, createJsonFile, updateJsonFile, listFolders, updateOrCreateChannelFile, getOrCreateChannelIndex, getExistingChannelIds, createFolder } from './services/driveService';
+import { findFileByName, getFileContent, createJsonFile, updateJsonFile, listFolders, updateOrCreateChannelFile, getOrCreateChannelIndex, getExistingChannelIds } from './services/driveService';
 import { Step } from './components/Step';
 import { LogItem } from './components/LogItem';
 
@@ -261,8 +261,6 @@ const App: React.FC = () => {
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const logCounter = useRef(0);
 
-    const [clientId, setClientId] = useState(() => localStorage.getItem('YT_CLIENT_ID') || '');
-    const [clientSecret, setClientSecret] = useState(() => localStorage.getItem('YT_CLIENT_SECRET') || '');
     const [youtubeApiKey, setYoutubeApiKey] = useState(() => localStorage.getItem('YT_API_KEY') || '');
     const [youtubeApiComplete, setYoutubeApiComplete] = useState(() => !!localStorage.getItem('YT_API_KEY'));
     
@@ -270,6 +268,7 @@ const App: React.FC = () => {
     const [folders, setFolders] = useState<DriveFile[]>([]);
     const [loadingFolders, setLoadingFolders] = useState(false);
     const [showFolderSelect, setShowFolderSelect] = useState(false);
+    const [driveFolderId, setDriveFolderId] = useState<string>(() => localStorage.getItem('DRIVE_FOLDER_ID') || '');
 
     const [step2Complete, setStep2Complete] = useState(false);
     const [minSubscribers, setMinSubscribers] = useState('1000000000');
@@ -367,8 +366,8 @@ const App: React.FC = () => {
 
     const addLog = useCallback((status: LogStatus, message: string) => {
         const timestamp = new Date().toLocaleTimeString();
-        logCounter.current += 1;
-        setLogs(prev => [{ id: logCounter.current, status, message, timestamp }, ...prev]);
+        const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        setLogs(prev => [{ id: uniqueId, status, message, timestamp }, ...prev]);
     }, []);
 
     useEffect(() => {
@@ -458,138 +457,7 @@ const App: React.FC = () => {
         }
     }, [updateMode, addLog]);
 
-    const handleLogin = useCallback(() => {
-        console.log("`handleLogin` 함수가 호출되었습니다.");
-        if (!clientId.trim()) {
-            addLog(LogStatus.ERROR, "Google 클라이언트 ID를 입력해야 합니다.");
-            return;
-        }
 
-        // Google Identity Services 로딩 확인
-        if (typeof google === 'undefined' || typeof gapi === 'undefined') {
-            addLog(LogStatus.ERROR, "Google API 스크립트가 아직 로드되지 않았습니다.");
-            return;
-        }
-
-        // 키를 로컬 스토리지에 저장
-        localStorage.setItem('YT_CLIENT_ID', clientId);
-        localStorage.setItem('YT_CLIENT_SECRET', clientSecret);
-
-        addLog(LogStatus.PENDING, "새로운 Google 인증을 시작합니다...");
-
-        // 새로운 Google Identity Services 방식
-        const handleCredentialResponse = (response: any) => {
-            console.log("인증 성공:", response);
-            // JWT 토큰 디코딩하여 사용자 정보 추출
-            const payload = JSON.parse(atob(response.credential.split('.')[1]));
-            setUser({
-                name: payload.name,
-                email: payload.email,
-                picture: payload.picture,
-            });
-            addLog(LogStatus.SUCCESS, `${payload.name}님, Google 계정으로 로그인되었습니다.`);
-        };
-
-        // Google Identity Services 초기화
-        google.accounts.id.initialize({
-            client_id: clientId,
-            callback: handleCredentialResponse,
-            auto_select: false,
-        });
-
-        // 바로 OAuth 2.0 방식 사용 (One Tap 건너뛰기)
-        addLog(LogStatus.INFO, "OAuth 2.0 로그인 창을 표시합니다.");
-        
-        const tokenClient = google.accounts.oauth2.initTokenClient({
-            client_id: clientId,
-            scope: SCOPES,
-            prompt: 'consent', // 항상 동의 화면 표시
-            include_granted_scopes: true, // 기존 권한도 포함
-            callback: async (response: any) => {
-                console.log("OAuth 인증 성공:", response);
-                
-                try {
-                    // 사용자 프로필 정보 가져오기 (fetch API 사용)
-                    const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-                        headers: {
-                            'Authorization': `Bearer ${response.access_token}`
-                        }
-                    });
-                    
-                    if (userResponse.ok) {
-                        const userInfo = await userResponse.json();
-                        console.log("사용자 정보:", userInfo);
-                        setUser({
-                            name: userInfo.name,
-                            email: userInfo.email,
-                            picture: userInfo.picture,
-                        });
-                        const authData = { access_token: response.access_token };
-                        setGoogleAuth(authData);
-                        addLog(LogStatus.SUCCESS, `${userInfo.name}님, Google 계정으로 로그인되었습니다.`);
-                        
-                        // gapi 클라이언트 초기화 후 Drive 폴더 목록 가져오기
-                        setTimeout(async () => {
-                            try {
-                                await initializeGapiClient(response.access_token);
-                                loadDriveFolders();
-                            } catch (error) {
-                                console.error('Drive 초기화 실패, 로그인은 성공:', error);
-                                addLog(LogStatus.WARNING, 'Drive 연동에 실패했지만 로그인은 완료되었습니다.');
-                            }
-                        }, 100);
-                    } else {
-                        // 사용자 정보를 가져올 수 없는 경우 기본값 사용
-                        console.warn("사용자 정보를 가져올 수 없습니다. 기본값을 사용합니다.");
-                        setUser({
-                            name: "Google User",
-                            email: "unknown@gmail.com", 
-                            picture: "https://via.placeholder.com/40"
-                        });
-                        const authData = { access_token: response.access_token };
-                        setGoogleAuth(authData);
-                        addLog(LogStatus.SUCCESS, "Google 계정으로 로그인되었습니다.");
-                        setTimeout(async () => {
-                            try {
-                                await initializeGapiClient(response.access_token);
-                                loadDriveFolders();
-                            } catch (error) {
-                                console.error('Drive 초기화 실패:', error);
-                                addLog(LogStatus.WARNING, 'Drive 연동 실패, 로그인은 완료');
-                            }
-                        }, 100);
-                    }
-                } catch (error) {
-                    console.error("사용자 정보 가져오기 실패:", error);
-                    // 오류가 발생해도 로그인은 성공으로 처리
-                    setUser({
-                        name: "Google User",
-                        email: "unknown@gmail.com",
-                        picture: "https://via.placeholder.com/40"
-                    });
-                    const authData = { access_token: response.access_token };
-                    setGoogleAuth(authData);
-                    addLog(LogStatus.SUCCESS, "Google 계정으로 로그인되었습니다.");
-                    setTimeout(async () => {
-                        try {
-                            await initializeGapiClient(response.access_token);
-                            loadDriveFolders();
-                        } catch (error) {
-                            console.error('Drive 초기화 실패:', error);
-                            addLog(LogStatus.WARNING, 'Drive 연동 실패, 로그인은 완료');
-                        }
-                    }, 100);
-                }
-            },
-            error_callback: (error: any) => {
-                console.error("OAuth 인증 실패:", error);
-                addLog(LogStatus.ERROR, `OAuth 인증 실패: ${error.error}`);
-            }
-        });
-        
-        tokenClient.requestAccessToken();
-
-    }, [clientId, youtubeApiKey, clientSecret, addLog]);
 
     const handleYouTubeApiSubmit = useCallback(() => {
         if (!youtubeApiKey.trim()) {
@@ -749,7 +617,7 @@ const App: React.FC = () => {
             if (updateMode === 'existing') {
                 // 기존 채널 업데이트 모드
                 addLog(LogStatus.PENDING, `기존 채널 확인 중... (${existingChannelsCount}개)`);
-                const ids = await getExistingChannelIds(selectedFolder.id);
+                const ids = await getExistingChannelIds(driveFolderId);
                 if (ids.length === 0) {
                     addLog(LogStatus.WARNING, '기존 채널이 없습니다. 신규 데이터 수집 모드로 전환해주세요.');
                     return;
@@ -769,7 +637,7 @@ const App: React.FC = () => {
                 // 신규 채널 수집 모드
                 addLog(LogStatus.PENDING, `🔍 신규 채널 탐색 중... (구독자 ${parseInt(minSubscribers).toLocaleString()}명 이하, ${sortOptions.find(o => o.value === sortOrder)?.label} 정렬, ${categoryLabel})`);
                 
-                const existingIds = await getExistingChannelIds(selectedFolder.id);
+                const existingIds = await getExistingChannelIds(driveFolderId);
                 const ids = await findChannelsImproved(youtubeApiKey, parseInt(minSubscribers, 10), sortOrder, channelCount, selectedCategory, existingIds, searchKeyword);
                 
                 if (ids.length === 0) {
@@ -1014,7 +882,7 @@ const App: React.FC = () => {
                 };
 
                 // 3. Google Drive 저장
-                await updateOrCreateChannelFile(channelData, selectedFolder.id || 'root');
+                await updateOrCreateChannelFile(channelData, driveFolderId || 'root');
 
                 // 4. 진행상황 업데이트
                 const newProgress = {
@@ -1101,6 +969,12 @@ const App: React.FC = () => {
     };
 
     const handleConfirmFieldsAndProcess = async () => {
+        console.log('=== handleConfirmFieldsAndProcess 호출됨 ===');
+        console.log('selectedFields.size:', selectedFields.size);
+        console.log('youtubeApiKey:', youtubeApiKey ? '설정됨' : '없음');
+        console.log('driveFolderId:', driveFolderId);
+        console.log('step4Complete:', step4Complete);
+        
         if (selectedFields.size === 0) {
             addLog(LogStatus.ERROR, '최소 1개 이상의 기본 데이터 필드를 선택해야 합니다.');
             return;
@@ -1111,8 +985,8 @@ const App: React.FC = () => {
             return;
         }
 
-        if (!selectedFolder) {
-            addLog(LogStatus.ERROR, 'Google Drive 폴더를 선택해주세요.');
+        if (!driveFolderId) {
+            addLog(LogStatus.ERROR, 'Google Drive 폴더 ID를 입력해주세요.');
             return;
         }
 
@@ -1127,7 +1001,7 @@ const App: React.FC = () => {
             if (updateMode === 'existing') {
                 // 기존 채널 업데이트 모드
                 addLog(LogStatus.PENDING, `기존 채널 데이터 업데이트 중... (${existingChannelsCount}개)`);
-                processTargetChannelIds = await getExistingChannelIds(selectedFolder.id);
+                processTargetChannelIds = await getExistingChannelIds(driveFolderId);
                 
                 if (processTargetChannelIds.length === 0) {
                     addLog(LogStatus.WARNING, '기존 채널이 없습니다. 신규 데이터 수집 모드로 전환해주세요.');
@@ -1156,7 +1030,7 @@ const App: React.FC = () => {
                     
                     // 1단계: 기존 채널 목록 먼저 가져오기
                     addLog(LogStatus.PENDING, '기존 채널 목록 확인 중...');
-                    const existingIds = await getExistingChannelIds(selectedFolder.id);
+                    const existingIds = await getExistingChannelIds(driveFolderId);
                     
                     // 2단계: 스마트 검색 - 기존 채널을 제외하고 검색
                     addLog(LogStatus.PENDING, `🔍 신규 채널 발굴 중... (기존 ${existingIds.length}개 제외, ${categoryLabel})`);
@@ -1322,10 +1196,16 @@ const App: React.FC = () => {
                     
                     addLog(LogStatus.PENDING, `채널 파일 저장 중... (${i + 1}/${processTargetChannelIds.length}): ${staticData?.title || channelId}`);
                     
-                    await updateOrCreateChannelFile(channelData, selectedFolder.id);
-                    processedCount++;
-                    
-                    addLog(LogStatus.SUCCESS, `✓ ${staticData?.title || channelId} 저장 완료`);
+                    try {
+                        await updateOrCreateChannelFile(channelData, driveFolderId);
+                        processedCount++;
+                        addLog(LogStatus.SUCCESS, `✓ ${staticData?.title || channelId} 저장 완료`);
+                    } catch (driveError: any) {
+                        addLog(LogStatus.ERROR, `❌ Drive 저장 실패: ${driveError.message}`);
+                        addLog(LogStatus.WARNING, `⚠️ 첫 번째 채널 저장 실패로 인해 처리를 중단합니다. 유튜브 할당량 절약을 위함입니다.`);
+                        // 저장 실패시 즉시 루프 중단
+                        break;
+                    }
                     
                     // Danbi 모드인 경우 진행상황 업데이트
                     if (updateMode === 'danbi_batch' && isDanbiMode) {
@@ -1356,12 +1236,8 @@ const App: React.FC = () => {
 
             // 스트리밍 방식으로 이미 모든 저장 완료됨
 
-            // collections 폴더 생성 및 간소화된 수집 기록 생성
-            let collectionsFolder = await findFileByName('collections', selectedFolder.id);
-            if (!collectionsFolder) {
-                collectionsFolder = await createFolder('collections', selectedFolder.id);
-                addLog(LogStatus.SUCCESS, '📁 collections 폴더를 생성했습니다.');
-            }
+            // collections 폴더 찾기 (생성하지 않음)
+            let collectionsFolder = await findFileByName('collections', driveFolderId);
 
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
             const metadataFileName = `${timestamp}.json`;
@@ -1372,8 +1248,12 @@ const App: React.FC = () => {
                 processedChannels: processTargetChannelIds.slice(0, processedCount)
             };
 
-            await createJsonFile(metadataFileName, collectionsFolder.id, metadataContent);
-            addLog(LogStatus.SUCCESS, `📋 수집 기록 파일 생성: collections/${metadataFileName}`);
+            if (collectionsFolder) {
+                await createJsonFile(metadataFileName, collectionsFolder.id, metadataContent);
+                addLog(LogStatus.SUCCESS, `📋 수집 기록 파일 생성: collections/${metadataFileName}`);
+            } else {
+                addLog(LogStatus.INFO, '📋 collections 폴더가 없어서 수집 기록을 건너뜁니다.');
+            }
             addLog(LogStatus.SUCCESS, `🎉 처리 완료: 총 ${processedCount}개 채널을 ${updateMode === 'existing' ? '업데이트' : '신규 수집'}했습니다.`);
             
             // 진행상황 완료 처리
@@ -1939,24 +1819,17 @@ const App: React.FC = () => {
                                 <div className="flex flex-col gap-2">
                                     <input
                                         type="text"
-                                        value={clientId}
-                                        onChange={(e) => setClientId(e.target.value)}
-                                        placeholder="Google 클라이언트 ID"
+                                        value={driveFolderId}
+                                        onChange={(e) => {
+                                            setDriveFolderId(e.target.value);
+                                            localStorage.setItem('DRIVE_FOLDER_ID', e.target.value);
+                                        }}
+                                        placeholder="Google Drive 폴더 ID (예: 1MsoASuSXq1HkW-tbdh0PjqmeaSxE8DL5)"
                                         className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base h-12"
                                     />
-                                    <input
-                                        type="text"
-                                        value={clientSecret}
-                                        onChange={(e) => setClientSecret(e.target.value)}
-                                        placeholder="클라이언트 보안 비밀"
-                                        className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base h-12"
-                                    />
-                                    <button onClick={handleLogin} disabled={!gapiScriptLoaded || !clientId.trim()} className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-wait text-white font-bold px-4 rounded-lg transition-colors text-lg h-12">
-                                        {gapiScriptLoaded ? '구글로그인' : 'API 로딩 중...'}
-                                    </button>
-                                    {user && (
+                                    {driveFolderId && (
                                         <div className="text-center mt-2">
-                                            <span className="text-green-400 font-medium">✅ 로그인 완료!</span>
+                                            <span className="text-green-400 font-medium">✅ 폴더 ID 입력 완료!</span>
                                         </div>
                                     )}
                                 </div>

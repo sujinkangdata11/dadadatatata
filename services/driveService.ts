@@ -1,7 +1,22 @@
 import { DriveFile } from '../types';
 
-const API_BASE_URL = 'https://www.googleapis.com/drive/v3';
-const API_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3';
+// 브라우저 환경에서 로컬 저장을 위한 유틸리티
+const downloadJsonFile = (fileName: string, content: object): void => {
+    const jsonContent = JSON.stringify(content, null, 2);
+    const blob = new Blob([jsonContent], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+};
+
+// 메모리에 저장된 파일들 (세션 동안만 유지)
+const localFileStorage: Map<string, object> = new Map();
 
 // 구독자 히스토리 관리 함수 (월별 최대 5개 유지)
 const updateSubscriberHistory = (existingHistory: any[] = [], newSubscriberCount: string): any[] => {
@@ -26,108 +41,82 @@ const updateSubscriberHistory = (existingHistory: any[] = [], newSubscriberCount
     }
 };
 
-// FIX: Removed 'declare global' block for 'gapi' which was causing a "Cannot redeclare block-scoped variable" error.
-// The type is now defined globally in `types.ts`.
-const getAuthToken = (): string => {
-    const token = gapi.client.getToken();
-    return token?.access_token || '';
-}
+// 브라우저 환경에서는 폴더 생성 불필요
 
 export const findFileByName = async (fileName: string, folderId: string): Promise<DriveFile | null> => {
     try {
-        const response = await gapi.client.drive.files.list({
-            q: `name='${fileName}' and '${folderId}' in parents and trashed=false`,
-            fields: 'files(id, name, kind, mimeType)',
-            spaces: 'drive',
-        });
-        const files = response.result.files;
-        return files.length > 0 ? files[0] : null;
+        if (localFileStorage.has(fileName)) {
+            return {
+                id: fileName,
+                name: fileName,
+                kind: 'drive#file',
+                mimeType: 'application/json'
+            };
+        }
+        
+        return null;
     } catch (error: any) {
         console.error('Error finding file:', error);
-        throw new Error(`Failed to search for file in Drive: ${error.result?.error?.message || error.message}`);
+        throw new Error(`Failed to search for file: ${error.message}`);
     }
 }
 
 export const getFileContent = async (fileId: string): Promise<string> => {
-    const response = await fetch(`${API_BASE_URL}/files/${fileId}?alt=media`, {
-        method: 'GET',
-        headers: new Headers({ 'Authorization': `Bearer ${getAuthToken()}` })
-    });
-    if (!response.ok) {
-        throw new Error(`Failed to get file content: ${response.statusText}`);
+    try {
+        const content = localFileStorage.get(fileId);
+        if (content) {
+            return JSON.stringify(content, null, 2);
+        }
+        throw new Error(`File not found: ${fileId}`);
+    } catch (error: any) {
+        throw new Error(`Failed to get file content: ${error.message}`);
     }
-    return response.text();
 }
 
 export const createJsonFile = async (fileName: string, folderId: string, content: object): Promise<DriveFile> => {
-    const fileMetadata = {
-        name: fileName,
-        mimeType: 'application/json',
-        parents: [folderId],
-    };
-
-    const boundary = '-------314159265358979323846';
-    const delimiter = `\r\n--${boundary}\r\n`;
-    const close_delim = `\r\n--${boundary}--`;
-
-    const multipartRequestBody =
-      delimiter +
-      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-      JSON.stringify(fileMetadata) +
-      delimiter +
-      'Content-Type: application/json\r\n\r\n' +
-      JSON.stringify(content, null, 2) +
-      close_delim;
-
-    const response = await fetch(`${API_UPLOAD_URL}/files?uploadType=multipart`, {
-        method: 'POST',
-        headers: new Headers({ 
-            'Authorization': `Bearer ${getAuthToken()}`,
-            'Content-Type': `multipart/related; boundary=${boundary}`
-        }),
-        body: multipartRequestBody
-    });
+    console.log(`🚀 [createJsonFile] 시작: ${fileName} (브라우저 다운로드)`);
     
-    if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`Failed to create file: ${errorData.error.message || response.statusText}`);
+    try {
+        // 메모리에 저장
+        localFileStorage.set(fileName, content);
+        
+        // 브라우저에서 자동 다운로드
+        downloadJsonFile(fileName, content);
+        
+        console.log(`✅ [createJsonFile] 성공: ${fileName} (다운로드됨)`);
+        
+        return {
+            id: fileName,
+            name: fileName,
+            kind: 'drive#file',
+            mimeType: 'application/json'
+        };
+    } catch (error: any) {
+        console.error(`❌ [createJsonFile] 다운로드 실패: ${fileName}`, error);
+        throw new Error(`Failed to download file: ${error.message}`);
     }
-
-    return response.json();
 }
 
 export const updateJsonFile = async (fileId: string, content: object): Promise<DriveFile> => {
-     const response = await fetch(`${API_UPLOAD_URL}/files/${fileId}?uploadType=media`, {
-        method: 'PATCH',
-        headers: new Headers({ 
-            'Authorization': `Bearer ${getAuthToken()}`,
-            'Content-Type': 'application/json'
-        }),
-        body: JSON.stringify(content, null, 2),
-    });
-    if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`Failed to update file: ${errorData.error.message || response.statusText}`);
+    try {
+        // 메모리에 업데이트
+        localFileStorage.set(fileId, content);
+        
+        // 브라우저에서 자동 다운로드 (업데이트된 파일)
+        downloadJsonFile(fileId, content);
+        
+        return {
+            id: fileId,
+            name: fileId,
+            kind: 'drive#file',
+            mimeType: 'application/json'
+        };
+    } catch (error: any) {
+        throw new Error(`Failed to update and download file: ${error.message}`);
     }
-    return response.json();
 }
 
-export const createFolder = async (folderName: string, parentId: string): Promise<DriveFile> => {
-    try {
-        const response = await gapi.client.drive.files.create({
-            resource: {
-                name: folderName,
-                mimeType: 'application/vnd.google-apps.folder',
-                parents: [parentId]
-            },
-            fields: 'id, name, mimeType'
-        });
-        return response.result;
-    } catch (error: any) {
-        console.error('폴더 생성 오류:', error);
-        throw new Error(`Failed to create folder: ${error.result?.error?.message || error.message}`);
-    }
-};
+// createFolder 함수 제거됨 - 로컬 저장으로 변경됨
 
 export const updateOrCreateChannelFile = async (
     channelData: any, 
@@ -136,14 +125,10 @@ export const updateOrCreateChannelFile = async (
     try {
         const fileName = `${channelData.channelId}.json`;
         
-        // channels 폴더가 있는지 확인, 없으면 생성
-        let channelsFolder = await findFileByName('channels', folderId);
-        if (!channelsFolder) {
-            channelsFolder = await createFolder('channels', folderId);
-        }
-
-        // 기존 채널 파일이 있는지 확인
-        const existingFile = await findFileByName(fileName, channelsFolder.id);
+        // 기존 채널 파일이 있는지 확인 (folderId가 이미 channels 폴더임)
+        console.log(`🔍 [DEBUG] 파일 검색 중: ${fileName} in ${folderId}`);
+        const existingFile = await findFileByName(fileName, folderId);
+        console.log(`📁 [DEBUG] 기존 파일 검색 결과:`, existingFile ? '있음' : '없음');
         
         const now = new Date().toISOString();
 
@@ -194,6 +179,7 @@ export const updateOrCreateChannelFile = async (
             };
 
             await updateJsonFile(existingFile.id, updatedChannelData);
+            console.log(`✅ 기존 파일 업데이트 완료: ${fileName}`);
         } else {
             // 새 파일 생성
             const newChannelData = {
@@ -210,7 +196,9 @@ export const updateOrCreateChannelFile = async (
                 }
             };
             
-            await createJsonFile(fileName, channelsFolder.id, newChannelData);
+            console.log(`🆕 새 파일 생성 시도: ${fileName}`);
+            await createJsonFile(fileName, folderId, newChannelData);
+            console.log(`✅ 새 파일 생성 완료: ${fileName}`);
         }
 
         // 채널 인덱스 업데이트
@@ -224,10 +212,8 @@ export const updateOrCreateChannelFile = async (
         };
 
         try {
-            // IMPORTANT: 채널 인덱스는 항상 루트('root')에 저장
-            // 개별 채널 파일은 사용자 선택 폴더에, 인덱스는 루트에 분리 저장
-            // 문제 발생시 이 부분을 'root' 대신 folderId로 변경 가능
-            await updateChannelIndex('root', channelInfo);
+            // 채널 인덱스를 로컬 json 폴더에 저장
+            await updateChannelIndex('local', channelInfo);
         } catch (indexError) {
             console.warn(`채널 인덱스 업데이트 실패 (채널 저장은 성공): ${indexError}`);
             // 인덱스 업데이트 실패해도 채널 저장은 성공한 것으로 처리
@@ -235,6 +221,8 @@ export const updateOrCreateChannelFile = async (
 
     } catch (error: any) {
         console.error(`채널 ${channelData.channelId} 파일 처리 오류:`, error);
+        console.error('오류 상세:', error.message);
+        console.error('오류 스택:', error.stack);
         throw error;
     }
 };
@@ -318,36 +306,12 @@ export const getExistingChannelIds = async (folderId: string): Promise<string[]>
 };
 
 export const listFolders = async (): Promise<DriveFile[]> => {
-    try {
-        console.log('Drive API 호출 시작...');
-        console.log('gapi:', typeof gapi);
-        console.log('gapi.client:', typeof gapi.client);
-        console.log('gapi.client.drive:', typeof gapi.client.drive);
-        
-        // 토큰 확인
-        const token = gapi.client.getToken();
-        console.log('현재 토큰:', token);
-        
-        // gapi 클라이언트가 준비되었는지 확인
-        if (!gapi.client.drive) {
-            throw new Error('Drive API 클라이언트가 초기화되지 않았습니다');
-        }
-        
-        const response = await gapi.client.drive.files.list({
-            q: "mimeType='application/vnd.google-apps.folder' and trashed=false",
-            fields: 'files(id, name, parents)',
-            orderBy: 'name',
-            pageSize: 100,
-        });
-        
-        console.log('Drive API 응답:', response);
-        console.log('폴더 개수:', response.result.files?.length || 0);
-        
-        return response.result.files || [];
-    } catch (error: any) {
-        console.error('폴더 목록 오류 상세:', error);
-        console.error('오류 타입:', typeof error);
-        console.error('오류 결과:', error.result);
-        throw new Error(`Failed to list folders: ${error.result?.error?.message || error.message}`);
-    }
+    // 로컬 저장으로 변경되어 폴더 목록이 필요없음
+    // 기본 로컬 폴더 반환
+    return [{
+        id: 'local',
+        name: 'Local JSON Storage',
+        kind: 'drive#file',
+        mimeType: 'application/vnd.google-apps.folder'
+    }];
 }
