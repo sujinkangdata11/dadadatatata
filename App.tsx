@@ -141,7 +141,7 @@ const getShortKey = (fieldId: string): string => {
         'viewsGainedPerDay': 'gvpd',
         'subsGainedPerMonth': 'gspm',
         'subsGainedPerYear': 'gspy',
-        'subscriberToViewRatioPercent': 'gsvr',
+        // 'subscriberToViewRatioPercent': 'gsvr', // 제거됨 - gsub와 중복
         'viralIndex': 'gvir',
         // Content Analysis (c로 시작)
         'shortsCount': 'csct',
@@ -191,8 +191,8 @@ const calculateMockAppliedData = (fieldId: string, mockStats: any): number => {
             return Math.round((subscriberCount / channelAgeDays) * 30.44);
         case 'subsGainedPerYear':
             return Math.round((subscriberCount / channelAgeDays) * 365.25);
-        case 'subscriberToViewRatioPercent':
-            return parseFloat(((subscriberCount / viewCount) * 100).toFixed(4));
+        // case 'subscriberToViewRatioPercent': // 제거됨 - gsub와 중복
+        //     return parseFloat(((subscriberCount / viewCount) * 100).toFixed(4));
         case 'viralIndex':
             const subRate = (subscriberCount / viewCount) * 100;
             const avgViews = viewCount / videoCount;
@@ -337,7 +337,7 @@ const App: React.FC = () => {
         'viewsGainedPerDay',        // 7. 일일 평균 조회수 증가
         'subsGainedPerMonth',       // 8. 월간 평균 구독자 증가
         'subsGainedPerYear',        // 9. 연간 평균 구독자 증가
-        'subscriberToViewRatioPercent', // 10. 구독자-조회수 비율 (%)
+        // 'subscriberToViewRatioPercent', // 제거됨 - gsub와 중복
         'viralIndex',               // 11. 바이럴 지수
         // 콘텐츠 분석 - 3개
         'shortsCount',              // 12. 숏폼 갯수
@@ -606,8 +606,8 @@ const App: React.FC = () => {
     };
 
     const handleFindChannels = async () => {
-        if (!user || !youtubeApiKey) {
-            addLog(LogStatus.ERROR, '로그인하고 API 키를 설정해야 채널을 탐색할 수 있습니다.');
+        if (!youtubeApiKey) {
+            addLog(LogStatus.ERROR, 'YouTube API 키를 설정해야 채널을 탐색할 수 있습니다.');
             return;
         }
         setIsFinding(true);
@@ -672,8 +672,8 @@ const App: React.FC = () => {
         const trimmedInput = manualChannelHandle.trim();
         if (!trimmedInput) return;
 
-        if (!user || !youtubeApiKey) {
-            addLog(LogStatus.ERROR, '로그인하고 API 키를 설정해야 채널을 추가할 수 있습니다.');
+        if (!youtubeApiKey) {
+            addLog(LogStatus.ERROR, 'YouTube API 키를 설정해야 채널을 추가할 수 있습니다.');
             return;
         }
 
@@ -1014,9 +1014,9 @@ const App: React.FC = () => {
             return;
         }
 
+        // Google Drive는 선택사항 (로컬 JSON 다운로드도 가능)
         if (!driveFolderId) {
-            addLog(LogStatus.ERROR, 'Google Drive 폴더 ID를 입력해주세요.');
-            return;
+            addLog(LogStatus.WARNING, 'Google Drive 폴더 ID가 없습니다. 로컬 JSON 다운로드로 진행합니다.');
         }
 
         try {
@@ -1211,6 +1211,51 @@ const App: React.FC = () => {
                         }));
                     }
 
+                    // 17개 축약 지표 검증 (gsvr 제거)
+                    const requiredFields = ['gavg', 'gsub', 'gvps', 'gage', 'gupw', 'gspd', 'gvpd', 'gspm', 'gspy', 'gvir', 'csct', 'clct', 'csdr', 'vesv', 'vsvp', 'velv', 'vlvp'];
+                    const missingFields = requiredFields.filter(field => finalSnapshotData[field as keyof typeof finalSnapshotData] === undefined);
+                    
+                    console.log(`// 17개 매칭 -> ${missingFields.length === 0 ? '성공' : '실패'} -> ${missingFields.length === 0 ? '저장합니다' : '종료합니다'}`);
+                    
+                    if (missingFields.length > 0) {
+                        console.log(`// 누락된 필드들: ${missingFields.join(', ')}`);
+                        addLog(LogStatus.ERROR, `❌ 17개 지표 검증 실패 - 누락된 필드: ${missingFields.join(', ')}`);
+                        addLog(LogStatus.WARNING, `⚠️ 필수 지표 누락으로 인해 저장을 중단합니다.`);
+                        break;
+                    }
+                    
+                    console.log('// 17개 매칭 -> 성공 -> 저장합니다 -> 다음으로');
+                    addLog(LogStatus.SUCCESS, `✓ 17개 지표 검증 완료 - ${staticData?.title || channelId}`);
+
+                    // 데이터 일관성 보정 로직 (ε = 1%)
+                    const ε = 1; // 최소 비중 1%
+                    const totalViews = parseInt(finalSnapshotData.viewCount);
+                    let correctionApplied = false;
+
+                    // [케이스 A] 롱폼 영상이 1개 이상인데, 롱폼 비중이 0%로 잡힌 경우
+                    if (finalSnapshotData.clct >= 1 && finalSnapshotData.vlvp === 0) {
+                        finalSnapshotData.vlvp = ε;                              // 롱폼에 최소 비중 1% 부여
+                        finalSnapshotData.vsvp = 100 - ε;                        // 숏폼 비중을 99%로 재조정
+                        finalSnapshotData.vesv = Math.round(totalViews * finalSnapshotData.vsvp / 100); // 숏폼 조회수 재계산
+                        finalSnapshotData.velv = totalViews - finalSnapshotData.vesv;              // 롱폼 조회수 잔여분
+                        correctionApplied = true;
+                        console.log('// 데이터 보정: 롱폼 존재하는데 비중 0% → 1% 부여');
+                    }
+
+                    // [케이스 B] 숏폼 영상이 1개 이상인데, 숏폼 비중이 0%로 잡힌 경우
+                    if (finalSnapshotData.csct >= 1 && finalSnapshotData.vsvp === 0) {
+                        finalSnapshotData.vsvp = ε;                              // 숏폼에 최소 비중 1% 부여
+                        finalSnapshotData.vlvp = 100 - ε;                        // 롱폼 비중을 99%로 재조정
+                        finalSnapshotData.velv = Math.round(totalViews * finalSnapshotData.vlvp / 100); // 롱폼 조회수 재계산
+                        finalSnapshotData.vesv = totalViews - finalSnapshotData.velv;              // 숏폼 조회수 잔여분
+                        correctionApplied = true;
+                        console.log('// 데이터 보정: 숏폼 존재하는데 비중 0% → 1% 부여');
+                    }
+
+                    if (correctionApplied) {
+                        addLog(LogStatus.INFO, `🔧 데이터 일관성 보정 적용 - ${staticData?.title || channelId}`);
+                    }
+
                     // 즉시 Drive에 저장 (메모리 절약)
                     const channelData = {
                         channelId,
@@ -1218,22 +1263,46 @@ const App: React.FC = () => {
                         snapshot: finalSnapshotData
                     };
                     
-                    setProcessingProgress(prev => ({
-                        ...prev,
-                        currentStep: 'Google Drive에 저장 중...'
-                    }));
-                    
-                    addLog(LogStatus.PENDING, `채널 파일 저장 중... (${i + 1}/${processTargetChannelIds.length}): ${staticData?.title || channelId}`);
-                    
-                    try {
-                        await updateOrCreateChannelFile(channelData, driveFolderId);
+                    if (driveFolderId) {
+                        // Google Drive 저장
+                        setProcessingProgress(prev => ({
+                            ...prev,
+                            currentStep: 'Google Drive에 저장 중...'
+                        }));
+                        
+                        addLog(LogStatus.PENDING, `채널 파일 저장 중... (${i + 1}/${processTargetChannelIds.length}): ${staticData?.title || channelId}`);
+                        
+                        try {
+                            await updateOrCreateChannelFile(channelData, driveFolderId);
+                            processedCount++;
+                            addLog(LogStatus.SUCCESS, `✓ ${staticData?.title || channelId} Google Drive 저장 완료`);
+                        } catch (driveError: any) {
+                            addLog(LogStatus.ERROR, `❌ Drive 저장 실패: ${driveError.message}`);
+                            addLog(LogStatus.WARNING, `⚠️ 첫 번째 채널 저장 실패로 인해 처리를 중단합니다. 유튜브 할당량 절약을 위함입니다.`);
+                            // 저장 실패시 즉시 루프 중단
+                            break;
+                        }
+                    } else {
+                        // 로컬 JSON 다운로드
+                        setProcessingProgress(prev => ({
+                            ...prev,
+                            currentStep: '로컬 JSON 파일 생성 중...'
+                        }));
+                        
+                        const fileName = `${channelId}.json`;
+                        const jsonContent = JSON.stringify(channelData, null, 2);
+                        const blob = new Blob([jsonContent], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = fileName;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        URL.revokeObjectURL(url);
+                        
                         processedCount++;
-                        addLog(LogStatus.SUCCESS, `✓ ${staticData?.title || channelId} 저장 완료`);
-                    } catch (driveError: any) {
-                        addLog(LogStatus.ERROR, `❌ Drive 저장 실패: ${driveError.message}`);
-                        addLog(LogStatus.WARNING, `⚠️ 첫 번째 채널 저장 실패로 인해 처리를 중단합니다. 유튜브 할당량 절약을 위함입니다.`);
-                        // 저장 실패시 즉시 루프 중단
-                        break;
+                        addLog(LogStatus.SUCCESS, `✓ ${staticData?.title || channelId} 로컬 JSON 다운로드 완료`);
                     }
                     
                     // Danbi 모드인 경우 진행상황 업데이트
@@ -1509,11 +1578,7 @@ const App: React.FC = () => {
                 console.log(`✅ [9] subsGainedPerYear: ${newSnapshot.gspy}명/년`);
             }
             
-            // 10. subscriberToViewRatioPercent (gsvr) - 구독자-조회수 비율
-            if (appliedFields.has('subscriberToViewRatioPercent') && subscriberCount && viewCount && viewCount > 0) {
-                newSnapshot.gsvr = parseFloat(((subscriberCount / viewCount) * 100).toFixed(4));
-                console.log(`✅ [10] subscriberToViewRatioPercent: ${newSnapshot.gsvr}%`);
-            }
+            // gsvr (subscriberToViewRatioPercent) 제거됨 - gsub와 중복이므로 삭제
             
             // 11. viralIndex (gvir) - 복합 계산
             if (appliedFields.has('viralIndex') && subscriberCount && viewCount && videoCount && videoCount > 0) {
@@ -1685,6 +1750,51 @@ const App: React.FC = () => {
                 // 3. Calculate applied data
                 const newSnapshotWithAppliedData = calculateAndAddAppliedData(snapshotData, staticData.publishedAt, shortsCountData);
 
+                // 3.5. 17개 축약 지표 검증 (gsvr 제거)
+                const requiredFields = ['gavg', 'gsub', 'gvps', 'gage', 'gupw', 'gspd', 'gvpd', 'gspm', 'gspy', 'gvir', 'csct', 'clct', 'csdr', 'vesv', 'vsvp', 'velv', 'vlvp'];
+                const missingFields = requiredFields.filter(field => newSnapshotWithAppliedData[field as keyof typeof newSnapshotWithAppliedData] === undefined);
+                
+                console.log(`// 17개 매칭 -> ${missingFields.length === 0 ? '성공' : '실패'} -> ${missingFields.length === 0 ? '저장합니다' : '종료합니다'}`);
+                
+                if (missingFields.length > 0) {
+                    console.log(`// 누락된 필드들: ${missingFields.join(', ')}`);
+                    addLog(LogStatus.ERROR, `❌ 17개 지표 검증 실패 - 누락된 필드: ${missingFields.join(', ')}`);
+                    addLog(LogStatus.WARNING, `⚠️ 필수 지표 누락으로 인해 저장을 중단합니다.`);
+                    return;
+                }
+                
+                console.log('// 17개 매칭 -> 성공 -> 저장합니다 -> 다음으로');
+                addLog(LogStatus.SUCCESS, `✓ 17개 지표 검증 완료 - ${staticData.title || channelId}`);
+
+                // 3.6. 데이터 일관성 보정 로직 (ε = 1%)
+                const ε = 1; // 최소 비중 1%
+                const totalViews = parseInt(newSnapshotWithAppliedData.viewCount);
+                let correctionApplied = false;
+
+                // [케이스 A] 롱폼 영상이 1개 이상인데, 롱폼 비중이 0%로 잡힌 경우
+                if (newSnapshotWithAppliedData.clct >= 1 && newSnapshotWithAppliedData.vlvp === 0) {
+                    newSnapshotWithAppliedData.vlvp = ε;                              // 롱폼에 최소 비중 1% 부여
+                    newSnapshotWithAppliedData.vsvp = 100 - ε;                        // 숏폼 비중을 99%로 재조정
+                    newSnapshotWithAppliedData.vesv = Math.round(totalViews * newSnapshotWithAppliedData.vsvp / 100); // 숏폼 조회수 재계산
+                    newSnapshotWithAppliedData.velv = totalViews - newSnapshotWithAppliedData.vesv;              // 롱폼 조회수 잔여분
+                    correctionApplied = true;
+                    console.log('// 데이터 보정: 롱폼 존재하는데 비중 0% → 1% 부여');
+                }
+
+                // [케이스 B] 숏폼 영상이 1개 이상인데, 숏폼 비중이 0%로 잡힌 경우
+                if (newSnapshotWithAppliedData.csct >= 1 && newSnapshotWithAppliedData.vsvp === 0) {
+                    newSnapshotWithAppliedData.vsvp = ε;                              // 숏폼에 최소 비중 1% 부여
+                    newSnapshotWithAppliedData.vlvp = 100 - ε;                        // 롱폼 비중을 99%로 재조정
+                    newSnapshotWithAppliedData.velv = Math.round(totalViews * newSnapshotWithAppliedData.vlvp / 100); // 롱폼 조회수 재계산
+                    newSnapshotWithAppliedData.vesv = totalViews - newSnapshotWithAppliedData.velv;              // 숏폼 조회수 잔여분
+                    correctionApplied = true;
+                    console.log('// 데이터 보정: 숏폼 존재하는데 비중 0% → 1% 부여');
+                }
+
+                if (correctionApplied) {
+                    addLog(LogStatus.INFO, `🔧 데이터 일관성 보정 적용 - ${staticData.title || channelId}`);
+                }
+
                 // 4. Find or create file in Google Drive
                 const fileName = `${channelId}.json`;
                 const folderId = selectedFolder?.id || 'root';
@@ -1795,7 +1905,7 @@ const App: React.FC = () => {
         addLog(LogStatus.ERROR, '프로세스가 사용자에 의해 중지되었습니다.');
     };
 
-    const allStepsComplete = !!user && step2Complete && step3Complete && step4Complete;
+    const allStepsComplete = step2Complete && step3Complete && step4Complete;
     const totalApiFields = apiDataFields.flatMap(group => group.fields).length;
     const totalAppliedFields = appliedDataFields.flatMap(group => group.fields).length;
 
@@ -2809,7 +2919,7 @@ const App: React.FC = () => {
                                     <span className="text-green-400 font-semibold"> 연간 수십GB 용량을 절약</span>할 수 있습니다.
                                 </p>
                                 <div className="bg-slate-700 rounded p-3 text-sm">
-                                    <p className="text-yellow-300">예시: subscriberToViewRatioPercent (26자) → gsvr (4자) = 85% 절약</p>
+                                    <p className="text-yellow-300">예시: estimatedShortsViews (18자) → vesv (4자) = 78% 절약</p>
                                 </div>
                             </div>
 
@@ -2854,10 +2964,7 @@ const App: React.FC = () => {
                                             <span className="text-slate-300">gspy</span>
                                             <span className="text-slate-400">subsGainedPerYear</span>
                                         </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-slate-300">gsvr</span>
-                                            <span className="text-slate-400">subscriberToViewRatioPercent</span>
-                                        </div>
+                                        {/* gsvr 제거됨 - gsub와 중복 */}
                                         <div className="flex justify-between">
                                             <span className="text-slate-300">gvir</span>
                                             <span className="text-slate-400">viralIndex</span>

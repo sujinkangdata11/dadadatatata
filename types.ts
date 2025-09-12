@@ -23,7 +23,7 @@ export interface Snapshot {
   gvpd?: number; // viewsGainedPerDay
   gspm?: number; // subsGainedPerMonth
   gspy?: number; // subsGainedPerYear
-  gsvr?: number; // subscriberToViewRatioPercent
+  // gsvr?: number; // subscriberToViewRatioPercent - 제거됨 (gsub와 중복)
   gvir?: number; // viralIndex
   // Content Analysis
   csct?: number; // shortsCount
